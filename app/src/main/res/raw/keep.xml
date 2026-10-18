@@ -1,0 +1,3 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Optional brand art (app/local/res) is looked up by name, so tell the resource shrinker to keep it. -->
+<resources xmlns:tools="http://schemas.android.com/tools" tools:keep="@drawable/art_*" />

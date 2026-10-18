@@ -1,0 +1,4 @@
+# Foyer's own code, compiled ahead of time from the first launch (profileinstaller installs this).
+# Library profiles (Compose, AndroidX) ship inside their AARs and are merged in by AGP.
+HSPLdev/rohan/foyer/**;->**(**)**
+Ldev/rohan/foyer/**;

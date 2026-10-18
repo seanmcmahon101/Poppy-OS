@@ -1,0 +1,12 @@
+local.properties
+.gradle/
+build/
+*/build/
+.kotlin/
+*.apk
+*.keystore
+*.jks
+
+# Brand art for well-known apps (art_<key>.jpg, 640x360). Those logos belong to their owners,
+# so they never go in git. See README "app art".
+app/local/
