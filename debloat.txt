@@ -1,0 +1,30 @@
+# Amazon packages Sean's sticks run disabled (pm disable-user: reversible, never uninstalled).
+# The one list: `homectl health` checks it, and FireStick-Tune.ps1 (next to this repo) applies it.
+# Format: <group> <package> <why>. core = always; extra = only with FireStick-Tune.ps1 -Extras.
+# Packages a firmware doesn't have are skipped. Fire OS refuses to disable two, so they're left out:
+# com.amazon.device.crashmanager, com.amazon.tv.csapp.
+# Deliberately never here: Amazon home (com.amazon.tv.launcher), keyboard, settings, Alexa voice
+# (com.amazon.vizzini), Appstore (com.amazon.venezia), system updates, Prime Video.
+
+core  com.amazon.kso                                  Sponsored content / special offers
+core  com.amazon.hybridadidservice                    Advertising ID service
+core  com.amazon.tv.acr                               Automatic content recognition (tracks what is on screen)
+core  com.amazon.dp.logger                            Device logging
+core  com.amazon.client.metrics                       Usage metrics
+core  com.amazon.client.metrics.api                   Usage metrics API
+core  com.amazon.wirelessmetrics.service              Wi-Fi metrics
+core  com.amazon.spiderpork                           Background telemetry
+core  com.amazon.logan                                Logging service
+core  com.amazon.tv.releasenotes                      "What's new" pop-ups
+core  com.amazon.ods.kindleconnect                    Kindle connect service
+core  com.amazon.sharingservice.android.client.proxy  Sharing service
+
+extra com.amazon.bueller.photos                       Amazon Photos (also photo screensaver)
+extra com.amazon.bueller.music                        Amazon Music
+extra com.amazon.shoptv.client                        Amazon Shopping
+extra com.amazon.shoptv.firetv.client                 Amazon Shopping (Fire TV)
+extra com.amazon.ags.app                              Amazon Games
+extra com.amazon.gloria.smarthome                     Smart home dashboard
+extra com.amazon.imdb.tv.android.app                  Freevee
+extra com.amazon.tv.ottssocompanionapp                Sign-in companion prompts
+extra com.amazon.tv.ftvambient                        Ambient Experience (art and info when idle)

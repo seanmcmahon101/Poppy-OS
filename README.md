@@ -61,8 +61,12 @@ Needs JDK 21 and the Android SDK (`sdk.dir` in `local.properties`). On Windows, 
 
 Home on Fire (first time per TV): install its release APK, then
 `adb shell pm grant io.github.toolicious.homeonfire android.permission.WRITE_SECURE_SETTINGS`,
-`./homectl hof`, switch its accessibility service on, choose Foyer as the target, and turn on
-"launch on boot". Then `./homectl health`.
+`adb shell settings put secure enabled_accessibility_services io.github.toolicious.homeonfire/.HijackService`,
+then `./homectl hof-target` (picks Foyer on its screen; "launch on boot" is on by default) and
+`./homectl health --home`. `health` without `--home` never touches the screen, so it's safe while
+someone is watching.
+
+`debloat.txt` is the list of Amazon packages kept disabled; `homectl health` checks it.
 
 Never `am start -S` or `am force-stop` Foyer or Home on Fire: on Fire OS, killing an app drops its
 accessibility service and Home goes back to Amazon.
