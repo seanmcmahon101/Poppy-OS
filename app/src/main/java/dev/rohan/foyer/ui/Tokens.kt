@@ -54,10 +54,10 @@ object Motion {
 private val textShadow = Shadow(color = Color.Black.copy(alpha = 0.35f), offset = Offset(0f, 2f), blurRadius = 24f)
 
 object Type {
-    /** Instrument Serif at 88 sp: Rohan's mockup (148 px = 74 sp), a bit bigger. Line height .9, tracking -.01 em. */
+    /** Centred HH:mm:ss: Google Sans Flex Light, tabular figures so the seconds don't make the row wobble. */
     val Clock = TextStyle(
-        fontFamily = InstrumentSerif, fontWeight = FontWeight.Normal, fontSize = 88.sp, lineHeight = 80.sp,
-        letterSpacing = (-0.9).sp, color = Ink.Paper, shadow = textShadow,
+        fontFamily = GoogleSansFlex, fontWeight = FontWeight.Light, fontSize = 64.sp, lineHeight = 72.sp,
+        letterSpacing = 1.sp, fontFeatureSettings = "tnum", color = Ink.Paper, shadow = textShadow,
     )
     val Date = TextStyle(
         fontFamily = GoogleSansFlex, fontWeight = FontWeight.Medium, fontSize = 15.sp, lineHeight = 20.sp,

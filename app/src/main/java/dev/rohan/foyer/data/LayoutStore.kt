@@ -57,12 +57,40 @@ class LayoutStore(context: Context) {
         set(v) = prefs.edit { putLong(K_PHOTO_SINCE, v) }
 
     var rotation: Rotation
-        get() = prefs.getString(K_ROTATION, null)?.let { runCatching { Rotation.valueOf(it) }.getOrNull() } ?: Rotation.Hourly
+        get() = prefs.getString(K_ROTATION, null)?.let { runCatching { Rotation.valueOf(it) }.getOrNull() } ?: Rotation.Never
         set(v) = prefs.edit { putString(K_ROTATION, v.name) }
 
     var night: NightMode
         get() = prefs.getString(K_NIGHT, null)?.let { runCatching { NightMode.valueOf(it) }.getOrNull() } ?: NightMode.Auto
         set(v) = prefs.edit { putString(K_NIGHT, v.name) }
+
+    /** Night.Auto runs from [nightFrom]:00 to [nightTo]:00, local time. */
+    var nightFrom: Int
+        get() = prefs.getInt(K_NIGHT_FROM, 20)
+        set(v) = prefs.edit { putInt(K_NIGHT_FROM, v) }
+    var nightTo: Int
+        get() = prefs.getInt(K_NIGHT_TO, 6)
+        set(v) = prefs.edit { putInt(K_NIGHT_TO, v) }
+
+    var clockSeconds: Boolean
+        get() = prefs.getBoolean(K_CLOCK_SECONDS, true)
+        set(v) = prefs.edit { putBoolean(K_CLOCK_SECONDS, v) }
+    var clockDate: Boolean
+        get() = prefs.getBoolean(K_CLOCK_DATE, false)
+        set(v) = prefs.edit { putBoolean(K_CLOCK_DATE, v) }
+
+    /** Tile names set over adb, package -> label. */
+    var labels: Map<String, String>
+        get() = prefs.getString(K_LABELS, null).orEmpty().lineSequence().mapNotNull { line ->
+            val tab = line.indexOf('\t')
+            if (tab <= 0) null else line.substring(0, tab) to line.substring(tab + 1)
+        }.toMap()
+        set(v) = prefs.edit {
+            putString(K_LABELS, v.entries.joinToString("\n") { (p, l) -> "$p\t${l.replace('\n', ' ').replace('\t', ' ')}" })
+        }
+
+    /** Back to first-run state (`homectl reset`). */
+    fun clear() = prefs.edit(commit = true) { clear() }
 
     private companion object {
         const val K_SHELF = "shelf"
@@ -74,5 +102,10 @@ class LayoutStore(context: Context) {
         const val K_PHOTO_SINCE = "photo_since"
         const val K_ROTATION = "rotation"
         const val K_NIGHT = "night"
+        const val K_NIGHT_FROM = "night_from"
+        const val K_NIGHT_TO = "night_to"
+        const val K_CLOCK_SECONDS = "clock_seconds"
+        const val K_CLOCK_DATE = "clock_date"
+        const val K_LABELS = "labels"
     }
 }

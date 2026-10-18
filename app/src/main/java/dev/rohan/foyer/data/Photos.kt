@@ -24,8 +24,8 @@ sealed interface Photo {
  */
 class PhotoRepository(private val context: Context) {
 
-    /** Dusk over hills, generated for Foyer (so it ships under the repo's licence). */
-    val builtins: List<Photo.Builtin> = listOf(Photo.Builtin("b:dusk", R.drawable.wall_default, null))
+    /** Sean's cat (DSC02102, cropped 16:9 from the top, 1920x1080). Always there, no permission needed. */
+    val builtins: List<Photo.Builtin> = listOf(Photo.Builtin("b:home", R.drawable.wall_default, null))
 
     @Suppress("DEPRECATION")
     val folder: File? get() = File(android.os.Environment.getExternalStoragePublicDirectory(android.os.Environment.DIRECTORY_PICTURES), "Foyer")

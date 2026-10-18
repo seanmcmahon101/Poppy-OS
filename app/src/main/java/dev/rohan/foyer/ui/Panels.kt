@@ -49,7 +49,6 @@ import androidx.compose.ui.unit.dp
 import dev.rohan.foyer.FoyerModel
 import dev.rohan.foyer.Overlay
 import dev.rohan.foyer.R
-import dev.rohan.foyer.data.TvInput
 
 /**
  * Keeps [value]'s content on screen through a 120 ms exit after it turns null; fades and scales in
@@ -99,39 +98,6 @@ private fun Modifier.trapFocus(fm: androidx.compose.ui.focus.FocusManager): Modi
         Dpad.Down -> { fm.moveFocus(FocusDirection.Down); true }
         Dpad.Left, Dpad.Right -> true
         null -> false
-    }
-}
-
-/** Inputs: one row per physical input, under the Inputs button. */
-@Composable
-fun InputsPanel(model: FoyerModel, backdrop: Backdrop?, firstFocus: FocusRequester, layer: Modifier, modifier: Modifier = Modifier) {
-    val fm = LocalFocusManager.current
-    Column(
-        modifier
-            .padding(top = 96.dp, end = Dims.Margin)
-            .width(280.dp)
-            .then(layer)
-            .floating(RoundedCornerShape(16.dp))
-            .glass(backdrop, RoundedCornerShape(16.dp), Ink.Shadow.copy(alpha = 0.5f))
-            .trapFocus(fm)
-            .padding(6.dp)
-    ) {
-        val inputs = model.inputs
-        if (inputs.isEmpty()) {
-            BasicText("Nothing connected", style = Type.RowNote, modifier = Modifier.padding(horizontal = 14.dp, vertical = 14.dp))
-            // Something must hold focus so Back still works.
-            Spacer(Modifier.size(1.dp).focusRequester(firstFocus).testTag("input:none").focusable())
-        }
-        inputs.forEachIndexed { i, input ->
-            PanelRow(
-                icon = R.drawable.ic_settings_input_hdmi,
-                text = input.label,
-                note = if (input.connected) null else "Nothing connected",
-                tag = "input:${input.label.lowercase().replace(' ', '_')}",
-                modifier = if (i == 0) Modifier.focusRequester(firstFocus) else Modifier,
-                onClick = { model.switchInput(input) },
-            )
-        }
     }
 }
 

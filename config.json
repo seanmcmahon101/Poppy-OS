@@ -1,0 +1,19 @@
+{
+  "$comment": "Foyer settings. Edit, then ./homectl apply (add -t living for the Max). ./homectl pull writes the TV's live settings back here. Apps can be named before they're installed.",
+  "shelf": [
+    "com.netflix.ninja",
+    "com.amazon.firebat",
+    "com.amazon.firetv.youtube",
+    "com.stremio.one",
+    "com.surfshark.vpnclient.android"
+  ],
+  "hidden": [
+    "com.esaba.downloader",
+    "com.spocky.projengmenu",
+    "io.github.toolicious.homeonfire"
+  ],
+  "labels": {},
+  "clock": { "seconds": true, "date": false },
+  "night": { "mode": "Auto", "from": 20, "to": 6 },
+  "photos": { "rotation": "Never" }
+}

@@ -39,6 +39,19 @@ data class Layout(val shelf: List<String>, val hidden: Set<String>) {
         return copy(shelf = out)
     }
 
+    /**
+     * Puts [pkg] (already on the shelf) at visible position [index] (0-based), counting only
+     * [installed], unhidden entries, so it lands where it's seen. Past the end means last.
+     */
+    fun moveTo(pkg: String, index: Int, installed: Set<String>): Layout {
+        if (pkg !in shelf) return this
+        val rest = shelf - pkg
+        val visible = rest.filter { it in installed && it !in hidden && !AppRules.isBlocked(it) }
+        val before = visible.getOrNull(index.coerceAtLeast(0))
+        val at = if (before == null) rest.size else rest.indexOf(before)
+        return copy(shelf = rest.toMutableList().apply { add(at, pkg) })
+    }
+
     companion object {
         fun firstRun(installed: Set<String>) = Layout(
             shelf = AppRules.defaultShelf.filter { it in installed },

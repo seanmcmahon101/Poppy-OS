@@ -9,8 +9,6 @@ import android.content.pm.ResolveInfo
 import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Color as AColor
-import android.media.tv.TvInputInfo
-import android.media.tv.TvInputManager
 import android.provider.Settings
 import android.util.Log
 import androidx.compose.ui.graphics.Color
@@ -27,10 +25,7 @@ sealed interface Art {
     data class Generated(val icon: ImageBitmap?, val color: Color) : Art
 }
 
-/** A physical input (HDMI etc.) from TvInputManager. [label] is the port ("HDMI 1"); [name] is Rohan's. */
-data class TvInput(val id: String, val label: String, val connected: Boolean)
-
-/** Everything Foyer needs from the system. Faked in tests. */
+/** Everything Foyer needs from the system. Faked in tests. (A stick has no HDMI inputs: upstream's Inputs are gone.) */
 interface Platform {
     /** Blocking. Every launchable app that isn't blocklisted, one per package. */
     fun scanApps(): List<App>
@@ -38,8 +33,6 @@ interface Platform {
     fun art(app: App): Art
     fun launch(pkg: String): Boolean
     fun openSettings(): Boolean
-    fun inputs(): List<TvInput>
-    fun switchInput(id: String, label: String): Boolean
 }
 
 /** Pending hop from the Settings-app screen to Amazon's main grid (see AndroidPlatform.openSettings). */
@@ -148,35 +141,6 @@ class AndroidPlatform(private val context: Context) : Platform {
         return start(Intent(Settings.ACTION_SETTINGS).setClassName(AMAZON_LAUNCHER, "$AMAZON_LAUNCHER.ui.SettingsActivity").addFlags(flags)) ||
             start(Intent(Settings.ACTION_SETTINGS).addFlags(flags))
     }
-
-    override fun inputs(): List<TvInput> {
-        val tim = context.getSystemService(TvInputManager::class.java) ?: return emptyList()
-        val physical = setOf(TvInputInfo.TYPE_HDMI, TvInputInfo.TYPE_COMPONENT, TvInputInfo.TYPE_COMPOSITE,
-            TvInputInfo.TYPE_SVIDEO, TvInputInfo.TYPE_SCART, TvInputInfo.TYPE_VGA, TvInputInfo.TYPE_DVI, TvInputInfo.TYPE_DISPLAY_PORT)
-        return runCatching {
-            tim.tvInputList
-                .filter { it.type in physical && it.parentId == null }
-                .map { info ->
-                    val label = (info.loadCustomLabel(context) ?: info.loadLabel(context))?.toString()?.trim().orEmpty()
-                    TvInput(info.id, label.ifEmpty { "Input" }, tim.getInputState(info.id) == TvInputManager.INPUT_STATE_CONNECTED)
-                }
-                .sortedWith(compareBy({ inputOrder(it.label) }, { it.label }))
-        }.getOrElse { Log.w(TAG, "inputs", it); emptyList() }
-    }
-
-    private fun inputOrder(label: String): Int = Regex("(\\d+)").find(label)?.value?.toIntOrNull() ?: 99
-
-    /**
-     * Foyer plays the input itself (InputActivity + TvView). On Fire OS 8 the passthrough URI only
-     * resolves to Live TV's alias, which opens Live TV rather than the input (Rohan, 2026-10-12), and
-     * Amazon's PassthroughPlayerActivity needs a signature permission.
-     */
-    override fun switchInput(id: String, label: String): Boolean = start(
-        Intent(context, dev.rohan.foyer.InputActivity::class.java)
-            .putExtra(dev.rohan.foyer.InputActivity.EXTRA_INPUT_ID, id)
-            .putExtra(dev.rohan.foyer.InputActivity.EXTRA_LABEL, label)
-            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-    )
 
     private fun start(intent: Intent): Boolean = try {
         context.startActivity(intent)

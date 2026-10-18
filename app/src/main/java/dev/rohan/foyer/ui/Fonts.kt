@@ -5,9 +5,6 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import dev.rohan.foyer.R
 
-/** Instrument Serif (OFL, Google Fonts): the clock only, as in Rohan's mockup. */
-val InstrumentSerif = FontFamily(Font(R.font.instrument_serif, FontWeight.Normal))
-
 /** Google Sans Flex (OFL, Google Fonts): every other piece of text. */
 val GoogleSansFlex = FontFamily(
     Font(R.font.gsf_light, FontWeight.Light),

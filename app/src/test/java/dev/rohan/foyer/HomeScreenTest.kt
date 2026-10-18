@@ -12,6 +12,9 @@ import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.github.takahirom.roborazzi.captureRoboImage
 import dev.rohan.foyer.data.Images
+import dev.rohan.foyer.data.Layout
+import dev.rohan.foyer.data.LayoutStore
+import androidx.compose.ui.test.assertTextEquals
 import dev.rohan.foyer.ui.FoyerScreen
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -53,12 +56,14 @@ class HomeScreenTest {
         val ctx = ApplicationProvider.getApplicationContext<android.content.Context>()
         fake = FakePlatform(ctx)
         val t = at(hour, minute)
+        // Upstream's tests walk Rohan's shelf; seed it, so they still check focus, scrolling and the drawer.
+        LayoutStore(ctx).saveLayout(Layout(UPSTREAM_SHELF, setOf("com.tailscale.ipn", "com.esaba.downloader")))
         model = FoyerModel(ctx, fake, CoroutineScope(Dispatchers.Unconfined), Dispatchers.Unconfined, clock = { t })
         before(model)
         model.start()
         compose.mainClock.autoAdvance = false
         compose.setContent { FoyerScreen(model, isDev = true) }
-        settle(27_000) // photo fade-in and the full 26 s drift
+        settle(2_000) // photo fade-in (no drift in Sean's fork)
     }
 
     /** With autoAdvance off, state written in a key handler is only picked up by waitForIdle. */
@@ -134,9 +139,10 @@ class HomeScreenTest {
     @Test fun upGoesToTheTopBarAndDownComesBack() {
         launch()
         press(listOf(Key.DirectionRight, Key.DirectionUp))
-        tag("top:inputs").assertIsFocused()
-        shot("topbar_inputs")
-        press(listOf(Key.DirectionRight, Key.DirectionRight))
+        tag("top:customize").assertIsFocused()
+        tag("top:inputs").assertDoesNotExist()
+        shot("topbar")
+        press(listOf(Key.DirectionRight, Key.DirectionRight)) // the second Right has nowhere to go
         tag("top:settings").assertIsFocused()
         press(listOf(Key.DirectionCenter))
         assertEquals(1, fake.settingsOpened)
@@ -170,36 +176,31 @@ class HomeScreenTest {
         shot("toast")
     }
 
-    @Test fun inputsPanel() {
-        launch()
-        press(listOf(Key.DirectionUp, Key.DirectionCenter))
-        tag("input:hdmi_1").assertIsFocused()
-        press(listOf(Key.DirectionDown))
-        shot("inputs")
-        press(listOf(Key.DirectionCenter))
-        assertEquals(listOf("com.mediatek.tis/.HdmiInputService/HW3"), fake.switched)
-        press(listOf(Key.Back))
-        tag("top:inputs").assertIsFocused()
+    @Test fun clockIsCentredWithSeconds() {
+        launch(hour = 21, minute = 7)
+        tag("clock").assertTextEquals("21:07:00")
+        tag("date").assertDoesNotExist()
+        shot("clock_night")
     }
 
     @Test fun customizeSheet() {
         launch(before = { photos("Dawn.jpg" to 0xFFB07A5A.toInt(), "Fjord.jpg" to 0xFF4A7AA6.toInt(), "Moss.jpg" to 0xFF5A8A5A.toInt()) })
-        press(listOf(Key.DirectionUp, Key.DirectionRight, Key.DirectionCenter))
-        tag("photo:u:Dawn.jpg").assertIsFocused()
+        press(listOf(Key.DirectionUp, Key.DirectionCenter))
+        tag("photo:b:home").assertIsFocused()
         shot("customize")
-        press(listOf(Key.DirectionRight), ms = 200) // preview Fjord (250 ms debounce runs in real time)
+        press(listOf(Key.DirectionRight), ms = 200) // preview Dawn (250 ms debounce runs in real time)
         Thread.sleep(600)
         settle(2_500)
-        assertEquals("u:Fjord.jpg", model.wall?.photo?.id)
+        assertEquals("u:Dawn.jpg", model.wall?.photo?.id)
         shot("customize_preview")
-        press(listOf(Key.DirectionCenter)) // switch Fjord off
-        assertTrue("u:Fjord.jpg" !in model.photosOn)
+        press(listOf(Key.DirectionCenter)) // switch Dawn off
+        assertTrue("u:Dawn.jpg" !in model.photosOn)
         press(listOf(Key.DirectionDown, Key.DirectionLeft, Key.DirectionLeft, Key.DirectionLeft, Key.DirectionCenter))
         assertEquals(dev.rohan.foyer.data.Rotation.Never, model.rotation)
         press(listOf(Key.Back), ms = 2_500)
         tag("top:customize").assertIsFocused()
-        // Fjord is off, so leaving goes back to a photo that's on.
-        assertEquals("u:Dawn.jpg", model.wall?.photo?.id)
+        // Dawn is off, so leaving goes back to a photo that's on: the cat.
+        assertEquals("b:home", model.wall?.photo?.id)
     }
 
     @Test fun menuMoveRearrangesTheShelf() {
@@ -243,19 +244,18 @@ class HomeScreenTest {
         assertEquals("com.discoveryplus.tv.fire", model.shelf.last().pkg)
     }
 
-    @Test fun ownPhotosReplaceTheBuiltInsAndNameTheCaption() {
+    @Test fun ownPhotosJoinTheBuiltInWhichStaysOnScreen() {
         launch(before = { photos("IMG_2041.jpg" to 0xFF5A3A2E.toInt(), "Pangong Tso, Ladakh.jpg" to 0xFF2E5A88.toInt()) })
-        assertTrue(model.photos.all { it is dev.rohan.foyer.data.Photo.Own })
-        assertEquals(listOf("u:IMG_2041.jpg", "u:Pangong Tso, Ladakh.jpg"), model.photos.map { it.id })
-        assertEquals(setOf("u:IMG_2041.jpg", "u:Pangong Tso, Ladakh.jpg"), model.photosOn)
-        assertEquals("u:IMG_2041.jpg", model.wall?.photo?.id)
-        assertEquals(null, model.wall?.photo?.caption)
-        assertEquals("Pangong Tso, Ladakh", model.photos[1].caption)
+        assertEquals(listOf("b:home", "u:IMG_2041.jpg", "u:Pangong Tso, Ladakh.jpg"), model.photos.map { it.id })
+        assertEquals(setOf("b:home", "u:IMG_2041.jpg", "u:Pangong Tso, Ladakh.jpg"), model.photosOn)
+        assertEquals("b:home", model.wall?.photo?.id) // the cat stays until Customize or `homectl photo`
+        assertEquals(null, model.photos[1].caption)
+        assertEquals("Pangong Tso, Ladakh", model.photos[2].caption)
     }
 
     @Test fun everyFiveMinutesIsAnOption() {
         launch()
-        press(listOf(Key.DirectionUp, Key.DirectionRight, Key.DirectionCenter, Key.DirectionDown))
+        press(listOf(Key.DirectionUp, Key.DirectionCenter, Key.DirectionDown))
         press(listOf(Key.DirectionLeft, Key.DirectionLeft, Key.DirectionLeft, Key.DirectionRight, Key.DirectionCenter))
         assertEquals(dev.rohan.foyer.data.Rotation.FiveMinutes, model.rotation)
         shot("customize_five_minutes")
@@ -265,5 +265,12 @@ class HomeScreenTest {
         launch(hour = 21, minute = 47)
         assertTrue(model.nightOn)
         shot("home_night")
+    }
+
+    private companion object {
+        val UPSTREAM_SHELF = listOf(
+            "com.netflix.ninja", "com.amazon.firebat", "in.startv.hotstar",
+            "com.amazon.firetv.youtube", "com.apple.atve.amazon.appletv", "com.spotify.tv.android",
+        )
     }
 }

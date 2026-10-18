@@ -9,12 +9,10 @@ import dev.rohan.foyer.data.AppRules
 import dev.rohan.foyer.data.Art
 import dev.rohan.foyer.data.Images
 import dev.rohan.foyer.data.Platform
-import dev.rohan.foyer.data.TvInput
 
 /** The living-room TV's apps, with bundled art; records what Foyer asked the system to do. */
 class FakePlatform(private val context: Context) : Platform {
     val launched = mutableListOf<String>()
-    val switched = mutableListOf<String>()
     var settingsOpened = 0
     var failLaunch = false
 
@@ -45,10 +43,4 @@ class FakePlatform(private val context: Context) : Platform {
 
     override fun launch(pkg: String): Boolean { if (failLaunch) return false; launched += pkg; return true }
     override fun openSettings(): Boolean { settingsOpened++; return true }
-    override fun inputs() = listOf(
-        TvInput("com.mediatek.tis/.HdmiInputService/HW2", "HDMI 1", connected = true),
-        TvInput("com.mediatek.tis/.HdmiInputService/HW3", "HDMI 2", connected = false),
-        TvInput("com.mediatek.tis/.HdmiInputService/HW4", "HDMI 3", connected = false),
-    )
-    override fun switchInput(id: String, label: String): Boolean { switched += id; return true }
 }

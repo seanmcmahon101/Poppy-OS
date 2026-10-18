@@ -9,11 +9,19 @@ import org.junit.Test
 class LayoutTest {
     private val installed = setOf("a", "b", "c", "d", "e")
 
-    @Test fun firstRunKeepsOnlyInstalledDefaultsInMockupOrder() {
-        val l = Layout.firstRun(setOf("com.spotify.tv.android", "com.netflix.ninja", "x.y", "com.amazon.firebat"))
-        assertEquals(listOf("com.netflix.ninja", "com.amazon.firebat", "com.spotify.tv.android"), l.shelf)
-        assertTrue("com.tailscale.ipn" in l.hidden)
+    @Test fun firstRunKeepsOnlyInstalledDefaultsInSeansOrder() {
+        val l = Layout.firstRun(setOf("com.stremio.one", "com.netflix.ninja", "x.y", "com.amazon.firebat"))
+        assertEquals(listOf("com.netflix.ninja", "com.amazon.firebat", "com.stremio.one"), l.shelf)
+        assertTrue("com.spocky.projengmenu" in l.hidden)
         assertTrue("io.github.toolicious.homeonfire" in l.hidden)
+    }
+
+    @Test fun moveToCountsVisiblePositionsOnly() {
+        val l = Layout(listOf("a", "gone", "b", "c"), setOf("x"))
+        assertEquals(listOf("c", "a", "gone", "b"), l.moveTo("c", 0, installed).shelf)
+        assertEquals(listOf("a", "gone", "c", "b"), l.moveTo("c", 1, installed).shelf)
+        assertEquals(listOf("gone", "b", "c", "a"), l.moveTo("a", 9, installed).shelf)
+        assertSame(l, l.moveTo("zzz", 0, installed))
     }
 
     @Test fun visibleShelfDropsUninstalledHiddenAndBlocked() {

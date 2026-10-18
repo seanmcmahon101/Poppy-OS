@@ -87,20 +87,15 @@ object Images {
         toDisplay(b)
     }.getOrNull()
 
-    /** The mockup's scrims in its own px (1920-wide canvas): top-left radial, top fade, bottom fade. */
+    /** The scrims in 1920-wide px: top fade (behind the centred clock), bottom fade (behind the shelf). */
     fun bakeScrims(b: Bitmap) {
         val c = android.graphics.Canvas(b)
         val w = b.width.toFloat()
         val h = b.height.toFloat()
-        val k = w / 1920f
         fun shade(a: Float) = (Math.round(a * 255) shl 24) or 0x05070B
         val p = android.graphics.Paint(android.graphics.Paint.DITHER_FLAG)
         val clamp = android.graphics.Shader.TileMode.CLAMP
-        val rx = 900f * k
-        val ry = 520f * k
-        p.shader = android.graphics.RadialGradient(0f, 0f, rx, intArrayOf(shade(0.62f), shade(0f)), floatArrayOf(0f, 0.7f), clamp)
-        c.save(); c.scale(1f, ry / rx); c.drawRect(0f, 0f, rx * 0.7f, rx * 0.7f, p); c.restore()
-        p.shader = android.graphics.LinearGradient(0f, 0f, 0f, h * 0.24f, shade(0.35f), shade(0f), clamp)
+        p.shader = android.graphics.LinearGradient(0f, 0f, 0f, h * 0.24f, shade(dev.rohan.foyer.ui.TOP_SCRIM), shade(0f), clamp)
         c.drawRect(0f, 0f, w, h * 0.24f, p)
         p.shader = android.graphics.LinearGradient(
             0f, h * 0.44f, 0f, h, intArrayOf(shade(0f), shade(0.42f), shade(0.82f)), floatArrayOf(0f, 0.26f / 0.56f, 1f), clamp,

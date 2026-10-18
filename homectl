@@ -1,0 +1,234 @@
+#!/usr/bin/env bash
+# homectl: drive Foyer (Sean's Fire TV home screen) over adb.
+#
+#   ./homectl [-t bedroom|living|<ip[:port]>] <command> [args]
+#
+# The TV defaults to $FOYER_TV, else bedroom (the test stick). Run `./homectl help` for commands.
+# Works from Git Bash on Windows and from Linux. adb is found via $ADB, PATH, ~/platform-tools,
+# or the platform-tools folder next to this repo's parent ("Firestick Work/platform-tools").
+#
+# Everything app-side goes through one broadcast receiver that only adb can reach
+# (app/src/main/java/dev/rohan/foyer/Control.kt). The rest is plain adb: install, photos, health.
+set -euo pipefail
+export MSYS_NO_PATHCONV=1   # Git Bash would otherwise rewrite /sdcard/... into a Windows path
+
+PKG=com.sean.foyer
+RECEIVER=$PKG/dev.rohan.foyer.ControlReceiver
+ACTIVITY=$PKG/dev.rohan.foyer.MainActivity
+HOF=io.github.toolicious.homeonfire
+HOF_SERVICE=$HOF/$HOF.HijackService
+PHOTO_DIR=/sdcard/Pictures/Foyer
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# Disabled by FireStick-Tune.ps1 -Apply -Extras on both sticks (health checks they stay disabled).
+DISABLED=(
+  com.amazon.hybridadidservice com.amazon.tv.acr com.amazon.dp.logger com.amazon.client.metrics.api
+  com.amazon.wirelessmetrics.service com.amazon.spiderpork com.amazon.logan com.amazon.tv.releasenotes
+  com.amazon.ods.kindleconnect com.amazon.sharingservice.android.client.proxy com.amazon.bueller.photos
+  com.amazon.bueller.music com.amazon.shoptv.client com.amazon.shoptv.firetv.client com.amazon.tv.ottssocompanionapp
+)
+
+tv_addr() {
+  case "$1" in
+    bedroom) echo 192.168.1.228:5555 ;;   # Fire TV Stick 4K (2nd gen), AFTKM: the test stick
+    living)  echo 192.168.1.235:5555 ;;   # Fire TV Stick 4K Max (2nd gen), AFTKRT
+    *:*)     echo "$1" ;;
+    *)       echo "$1:5555" ;;
+  esac
+}
+
+TV="${FOYER_TV:-bedroom}"
+if [[ "${1:-}" == "-t" ]]; then TV="$2"; shift 2; fi
+SERIAL="$(tv_addr "$TV")"
+
+find_adb() {
+  if [[ -n "${ADB:-}" ]]; then echo "$ADB"; return; fi
+  if command -v adb >/dev/null 2>&1; then command -v adb; return; fi
+  for c in "$HOME/platform-tools/adb" "$HERE/../../platform-tools/adb.exe" "$HERE/../../platform-tools/adb"; do
+    [[ -x "$c" ]] && { echo "$c"; return; }
+  done
+  echo "homectl: no adb found (set ADB=/path/to/adb)" >&2; exit 2
+}
+ADB_BIN="$(find_adb)"
+
+adb()  { "$ADB_BIN" -s "$SERIAL" "$@"; }
+# A local file path adb.exe can open (Git Bash's /c/... means nothing to a Windows exe).
+local_path() { if command -v cygpath >/dev/null 2>&1; then cygpath -w "$1"; else echo "$1"; fi; }
+sh_()  { adb shell "$@" | tr -d '\r'; }
+# Quote one argument for the TV's shell.
+q()    { local s=${1//\'/\'\\\'\'}; printf "'%s'" "$s"; }
+
+connect() {
+  "$ADB_BIN" connect "$SERIAL" >/dev/null 2>&1 || true
+  local state; state="$("$ADB_BIN" -s "$SERIAL" get-state 2>/dev/null | tr -d '\r' || true)"
+  if [[ "$state" != device ]]; then
+    echo "homectl: $SERIAL is '${state:-unreachable}'. ADB debugging on? 'Allow' prompt on the TV?" >&2
+    exit 2
+  fi
+}
+
+# ctl <cmd> [extras...]: one broadcast to Foyer; prints its answer, exits 1 if Foyer said error.
+ctl() {
+  local cmd="$1"; shift
+  local raw
+  raw="$(adb shell am broadcast -n "$RECEIVER" --es cmd "$(q "$cmd")" "$@" | tr -d '\r')"
+  if [[ "$raw" != *"data=\""* ]]; then
+    if [[ "$raw" == *"result=0"* ]]; then echo "ok"; return; fi
+    echo "homectl: no answer from Foyer. Installed? ($PKG)" >&2
+    echo "$raw" >&2; exit 1
+  fi
+  local data="${raw#*data=\"}"; data="${data%\"*}"
+  echo "$data"
+  [[ "$raw" == *"result=0,"* ]]
+}
+
+# Arguments as named extras: arg, arg2.
+ctl_args() {
+  local cmd="$1"; shift
+  local extras=()
+  [[ $# -ge 1 ]] && extras+=(--es arg "$(q "$1")")
+  [[ $# -ge 2 ]] && { shift; extras+=(--es arg2 "$(q "$*")"); }
+  ctl "$cmd" "${extras[@]}"
+}
+
+b64() { base64 -w0 2>/dev/null < "$1" || base64 < "$1" | tr -d '\n'; }
+
+usage() {
+  cat <<EOF
+homectl [-t bedroom|living|<ip>] <command>      TV now: $TV ($SERIAL)
+
+Settings (source of truth: config.json next to this script)
+  apply [file]              send config.json (or file) to the TV
+  pull [file]               save the TV's live settings into config.json (or file)
+  get                       everything as JSON: settings, home row, apps, photos, screen
+  config                    the TV's settings, config.json-shaped
+  set <key> <value>         seconds on|off · date on|off · night Auto|Always|Off
+                            night_from 0-23 · night_to 0-23 · rotation Never|FiveMinutes|Hourly|Daily
+
+Home row and apps (<app> = package or any unambiguous bit of its name)
+  apps                      installed apps: package, label
+  add <app> [pos]           onto the home row (end, or 1-based position)
+  remove <app>              off the home row
+  move <app> <pos>          along the home row
+  hide <app> | unhide <app> out of All apps entirely / back
+  label <app> [name]        rename a tile; no name resets it
+  launch <app>              open it
+
+Photos (/sdcard/Pictures/Foyer; the file name is the caption)
+  wall <image>...           push photos (Foyer crops to 16:9 itself)
+  unwall <file name>        delete one from the TV
+  photo next|<name>         show one now
+
+Screen and setup
+  open                      bring Foyer to the front (never 'am start -S': it kills Home on Fire's hook)
+  ui home|apps|customize|settings
+  rescan                    re-read apps, photos, settings
+  shot [name]               screenshot into launcher/_scratch
+  dump                      uiautomator dump, as text (cheaper than a screenshot)
+  install [apk]             install/update Foyer and grant its permissions
+  hof                       open Home on Fire's own screen (pick Foyer as its target there)
+  health                    check everything that should be true; non-zero exit on drift
+  reset                     forget all settings on the TV (first-run defaults)
+  raw <cmd> [arg] [arg2]    any Control.kt command as-is
+EOF
+}
+
+cmd="${1:-help}"; shift || true
+case "$cmd" in
+  help|-h|--help) usage; exit 0 ;;
+esac
+connect
+
+case "$cmd" in
+  get|config|apps|rescan|reset) ctl "$cmd" ;;
+  set|add|remove|move|hide|unhide|label|launch|photo|ui) ctl_args "$cmd" "$@" ;;
+  raw) c="$1"; shift; ctl_args "$c" "$@" ;;
+
+  apply)
+    f="${1:-$HERE/config.json}"
+    [[ -f "$f" ]] || { echo "homectl: no $f" >&2; exit 2; }
+    ctl apply --es b64 "$(b64 "$f")"
+    ;;
+  pull)
+    f="${1:-$HERE/config.json}"
+    out="$(ctl config)"
+    printf '%s\n' "$out" > "$f"
+    echo "wrote $f"
+    ;;
+
+  wall)
+    [[ $# -ge 1 ]] || { echo "usage: homectl wall <image>..." >&2; exit 2; }
+    sh_ "mkdir -p $PHOTO_DIR" >/dev/null
+    for img in "$@"; do adb push "$(local_path "$img")" "$PHOTO_DIR/" >/dev/null && echo "pushed $(basename "$img")"; done
+    ctl rescan >/dev/null 2>&1 || echo "(Foyer isn't running; it picks them up when it opens)"
+    ;;
+  unwall)
+    [[ $# -ge 1 ]] || { echo "usage: homectl unwall <file name>" >&2; exit 2; }
+    sh_ "rm $(q "$PHOTO_DIR/$1")"
+    ctl rescan >/dev/null 2>&1 || true
+    echo "removed $1"
+    ;;
+
+  open) sh_ "am start -n $ACTIVITY" ;;
+  hof)  sh_ "am start -n $HOF/.MainActivity" ;;
+  shot)
+    mkdir -p "$HERE/../_scratch"
+    f="$HERE/../_scratch/${1:-shot-$(date +%H%M%S)}.png"
+    adb exec-out screencap -p > "$f" && echo "$f"
+    ;;
+  dump)
+    sh_ "uiautomator dump /sdcard/ui.xml" >/dev/null
+    sh_ "cat /sdcard/ui.xml" | tr '>' '\n' \
+      | grep -o 'resource-id="[^"]*"\|text="[^"]\+"\|content-desc="[^"]\+"\|focused="true"' | paste -sd' ' | sed 's/resource-id=/\n/g'
+    echo
+    ;;
+
+  install)
+    apk="${1:-}"
+    if [[ -z "$apk" ]]; then
+      base="${LOCALAPPDATA:+$(cygpath -u "$LOCALAPPDATA" 2>/dev/null || echo "$LOCALAPPDATA")/foyer-build/app}"
+      apk="$(ls -t "${base:-$HERE/app/build}"/outputs/apk/release/*.apk 2>/dev/null | head -1 || true)"
+    fi
+    [[ -f "$apk" ]] || { echo "homectl: no APK (build with ./gradlew assembleRelease, or pass a path)" >&2; exit 2; }
+    echo "installing $apk"
+    adb install -r "$(local_path "$apk")"
+    sh_ "pm grant $PKG android.permission.READ_EXTERNAL_STORAGE" || true
+    sh_ "appops set $PKG SYSTEM_ALERT_WINDOW allow"
+    sh_ "mkdir -p $PHOTO_DIR" >/dev/null
+    echo "granted storage + background-start; next: ./homectl -t $TV apply && ./homectl -t $TV health"
+    ;;
+
+  health)
+    fail=0
+    ok()  { printf '  ok    %s\n' "$1"; }
+    bad() { printf '  FAIL  %s\n' "$1"; fail=1; }
+    echo "$TV ($SERIAL): $(sh_ 'getprop ro.product.model') Fire OS $(sh_ 'getprop ro.build.version.name' | sed 's/^Fire OS //')"
+
+    v="$(sh_ "dumpsys package $PKG" | grep -m1 versionName | sed 's/.*=//')"
+    [[ -n "$v" ]] && ok "Foyer installed ($v)" || bad "Foyer not installed"
+    sh_ "dumpsys package $PKG" | grep -q 'READ_EXTERNAL_STORAGE: granted=true' && ok "photo permission granted" || bad "READ_EXTERNAL_STORAGE not granted (homectl install)"
+    sh_ "appops get $PKG SYSTEM_ALERT_WINDOW" | grep -q allow && ok "background start allowed (Settings hop, launch)" || bad "SYSTEM_ALERT_WINDOW appop not allowed"
+
+    acc="$(sh_ 'settings get secure enabled_accessibility_services')"
+    [[ "$acc" == *"$HOF_SERVICE"* || "$acc" == *"$HOF/.HijackService"* ]] && ok "Home on Fire service enabled" || bad "Home on Fire service not enabled ($acc)"
+    [[ "$acc" == *projengmenu* ]] && bad "Projectivy's service is also on: two Home redirectors will fight" || ok "Projectivy redirect off"
+    sh_ 'dumpsys accessibility' | grep -A3 'Bound services' | grep -q homeonfire && ok "Home on Fire service bound" || bad "Home on Fire service not bound (open it once: homectl hof)"
+
+    for p in "${DISABLED[@]}"; do
+      if sh_ "pm list packages -d $p" | grep -qx "package:$p"; then :; else
+        sh_ "pm list packages $p" | grep -qx "package:$p" && bad "$p re-enabled" || true
+      fi
+    done
+    ok "debloat list checked"
+    [[ "$(sh_ 'settings get global private_dns_specifier')" == dns.adguard-dns.com ]] && ok "Private DNS: AdGuard" || bad "Private DNS changed"
+    [[ "$(sh_ 'settings get global window_animation_scale')" == 0.5 ]] && ok "animations 0.5x" || bad "animation scale changed"
+
+    sh_ 'input keyevent KEYCODE_HOME'
+    sleep 3
+    top="$(sh_ 'dumpsys activity activities' | grep -m1 -E 'mResumedActivity|topResumedActivity' || true)"
+    [[ "$top" == *"$PKG"* ]] && ok "Home lands on Foyer" || bad "Home landed on: ${top:-?}"
+    exit $fail
+    ;;
+
+  *) echo "homectl: unknown command '$cmd'" >&2; usage >&2; exit 2 ;;
+esac

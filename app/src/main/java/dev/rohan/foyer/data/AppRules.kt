@@ -6,6 +6,7 @@ object AppRules {
     /** Never shown anywhere. */
     private val blocked = setOf(
         "dev.rohan.foyer", "dev.rohan.foyer.dev", "dev.rohan.foyer.debug",
+        "com.sean.foyer", "com.sean.foyer.dev", "com.sean.foyer.debug",
         "com.amazon.tv.launcher",
         "com.mediatek.opapp",
         "com.apple.airplay.amazon.airplay", "com.amazon.tv.earlyaccess",
@@ -17,16 +18,19 @@ object AppRules {
 
     fun isBlocked(pkg: String): Boolean = pkg in blocked || blockedPrefixes.any { pkg.startsWith(it) }
 
-    /** Hidden on first run; Rohan can unhide them in Customize. */
+    /** Hidden on first run; unhide in Customize or with `homectl unhide`. */
     val defaultHidden: Set<String> = setOf(
-        "com.tailscale.ipn", "io.github.toolicious.homeonfire", "com.omeda.arc", "com.esaba.downloader",
+        "io.github.toolicious.homeonfire", "com.spocky.projengmenu", "com.esaba.downloader",
     )
 
-    /** First-run shelf, in the mockup's order. */
+    /** First-run shelf. After that, launcher/config.json (`homectl apply`) is the source of truth. */
     val defaultShelf: List<String> = listOf(
-        "com.netflix.ninja", "com.amazon.firebat", "in.startv.hotstar",
-        "com.amazon.firetv.youtube", "com.apple.atve.amazon.appletv", "com.spotify.tv.android",
+        "com.netflix.ninja", "com.amazon.firebat", "com.amazon.firetv.youtube",
+        "com.stremio.one", "com.surfshark.vpnclient.android",
     )
+
+    /** Names set over adb (`homectl label`); win over the built-in and system labels. */
+    @Volatile var userLabels: Map<String, String> = emptyMap()
 
     private val fixedLabels = mapOf(
         "com.netflix.ninja" to "Netflix",
@@ -55,7 +59,7 @@ object AppRules {
     )
 
     fun label(pkg: String, systemLabel: String?): String =
-        fixedLabels[pkg] ?: systemLabel?.trim()?.takeIf { it.isNotEmpty() } ?: pkg
+        userLabels[pkg] ?: fixedLabels[pkg] ?: systemLabel?.trim()?.takeIf { it.isNotEmpty() } ?: pkg
 
     fun artKey(pkg: String): String? = artKeys[pkg]
 

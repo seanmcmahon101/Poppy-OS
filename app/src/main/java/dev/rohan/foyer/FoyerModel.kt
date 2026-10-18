@@ -23,7 +23,6 @@ import dev.rohan.foyer.data.Photo
 import dev.rohan.foyer.data.PhotoRepository
 import dev.rohan.foyer.data.Platform
 import dev.rohan.foyer.data.Rotation
-import dev.rohan.foyer.data.TvInput
 import dev.rohan.foyer.ui.frostedCopy
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
@@ -41,7 +40,6 @@ import java.util.Calendar
 sealed interface Overlay {
     data object None : Overlay
     data object AllApps : Overlay
-    data object Inputs : Overlay
     data object Customize : Overlay
     data class Menu(val pkg: String, val fromShelf: Boolean) : Overlay
 }
@@ -92,7 +90,7 @@ class FoyerModel(
         private set
     /** Focused shelf index (also the one focus returns to). */
     var shelfIndex by mutableIntStateOf(0)
-    /** Last-focused top-bar button: 0 Inputs, 1 Customize, 2 Settings. */
+    /** Last-focused top-bar button: 0 Customize, 1 Settings. */
     var topIndex by mutableIntStateOf(0)
     /** Focus zone on the home layer: true while a top-bar button has focus. */
     var inTopBar by mutableStateOf(false)
@@ -103,20 +101,31 @@ class FoyerModel(
         private set
     private var toastJob: Job? = null
 
-    var inputs by mutableStateOf<List<TvInput>>(emptyList())
-        private set
-
-    // ---- time, night ------------------------------------------------------------------------
+    // ---- time, night, clock -----------------------------------------------------------------
     var now by mutableLongStateOf(clock())
         private set
+    /** True between onStart and onStop: the seconds clock only ticks while it can be seen. */
+    var visible by mutableStateOf(false)
     var night by mutableStateOf(store.night)
+        private set
+    var nightFrom by mutableIntStateOf(store.nightFrom)
+        private set
+    var nightTo by mutableIntStateOf(store.nightTo)
+        private set
+    var clockSeconds by mutableStateOf(store.clockSeconds)
+        private set
+    var clockDate by mutableStateOf(store.clockDate)
         private set
     val nightOn: Boolean
         get() = when (night) {
             NightMode.Always -> true
             NightMode.Off -> false
-            NightMode.Auto -> Calendar.getInstance().apply { timeInMillis = now }.get(Calendar.HOUR_OF_DAY).let { it >= 20 || it < 6 }
+            NightMode.Auto -> Calendar.getInstance().apply { timeInMillis = now }.get(Calendar.HOUR_OF_DAY).let { h ->
+                if (nightFrom > nightTo) h >= nightFrom || h < nightTo else h in nightFrom until nightTo
+            }
         }
+
+    init { AppRules.userLabels = store.labels }
 
     // ---- photos -----------------------------------------------------------------------------
     var photos by mutableStateOf<List<Photo>>(photoRepo.builtins)
@@ -147,7 +156,63 @@ class FoyerModel(
         loadArt(shelf + allApps)
         refreshApps()
         refreshPhotos()
-        refreshInputs()
+    }
+
+    /**
+     * Settings changed underneath us (ControlReceiver wrote LayoutStore from adb): re-read them all.
+     * Apps are rescanned so new labels apply; the photo folder is rescanned too.
+     */
+    fun reload() {
+        val stored = store.layout()
+        if (stored != null) { layout = stored; layoutStored = true }
+        else { layout = Layout(emptyList(), AppRules.defaultHidden); layoutStored = false } // reset: refreshApps re-seeds
+        rotation = store.rotation
+        night = store.night
+        nightFrom = store.nightFrom
+        nightTo = store.nightTo
+        clockSeconds = store.clockSeconds
+        clockDate = store.clockDate
+        AppRules.userLabels = store.labels
+        now = clock()
+        shelfIndex = shelfIndex.coerceIn(0, (shelf.size - 1).coerceAtLeast(0))
+        refreshApps(force = true)
+        refreshPhotos()
+        focusEpoch++
+    }
+
+    /** `homectl photo next`: the next switched-on photo, now. */
+    fun nextPhoto() {
+        val next = nextOn(currentId)
+        currentId = next
+        store.currentPhoto = next
+        store.photoSince = clock()
+        showPhoto(next, FADE_PHOTO)
+    }
+
+    /** `homectl photo <name>`: a photo by id or caption. False if none matches. */
+    fun showPhotoNamed(q: String): Boolean {
+        val p = photos.firstOrNull { it.id.equals(q, true) || it.id.removePrefix("u:").substringBeforeLast('.').equals(q, true) || it.caption.equals(q, true) }
+            ?: return false
+        currentId = p.id
+        store.currentPhoto = p.id
+        store.photoSince = clock()
+        showPhoto(p.id, FADE_PHOTO)
+        return true
+    }
+
+    /** For `homectl get`: which photos exist, which are on, which is shown. */
+    fun photoState(): Triple<List<Photo>, Set<String>, String> = Triple(photos, photosOn, currentId)
+
+    /** `homectl ui <where>`, for driving and testing from adb. */
+    fun showUi(where: String): Boolean {
+        when (where) {
+            "home" -> closeEverything()
+            "apps" -> { closeEverything(); openAllApps() }
+            "customize" -> { closeEverything(); openCustomize() }
+            "settings" -> openSettings()
+            else -> return false
+        }
+        return true
     }
 
     /** Back in front (onStart): put back what a trim released, then refresh in the background. */
@@ -168,7 +233,6 @@ class FoyerModel(
         rotateIfDue(visible = false)
         refreshApps()
         refreshPhotos()
-        refreshInputs()
     }
 
     /** onTrimMemory(UI_HIDDEN): keep only the tiny frosted copy. */
@@ -212,11 +276,11 @@ class FoyerModel(
     // =========================================================================================
     // Apps
 
-    fun refreshApps() {
+    fun refreshApps(force: Boolean = false) {
         scope.launch {
             val scanned = withContext(io) { runCatching { platform.scanApps() }.getOrNull() } ?: return@launch
             val sorted = AppRules.alphabetical(scanned)
-            if (sorted != installed) {
+            if (force || sorted != installed) {
                 installed = sorted
                 store.saveApps(sorted)
             }
@@ -324,12 +388,6 @@ class FoyerModel(
 
     fun openAllApps() { if (moving == null) overlay = Overlay.AllApps }
 
-    fun openInputs() {
-        if (moving != null) return
-        refreshInputs()
-        overlay = Overlay.Inputs
-    }
-
     fun openCustomize() {
         if (moving != null) return
         refreshPhotos()
@@ -370,16 +428,6 @@ class FoyerModel(
         focusEpoch++
     }
 
-    private fun refreshInputs() {
-        scope.launch {
-            inputs = withContext(io) { runCatching { platform.inputs() }.getOrDefault(emptyList()) }
-        }
-    }
-
-    fun switchInput(input: TvInput) {
-        if (!platform.switchInput(input.id, input.label)) showToast("Couldn't switch to ${input.label}")
-    }
-
     private fun showToast(text: String) {
         toastJob?.cancel()
         toast = text
@@ -392,9 +440,9 @@ class FoyerModel(
     private fun refreshPhotos() {
         scope.launch {
             val own = withContext(io) { runCatching { photoRepo.scanOwn() }.getOrDefault(emptyList()) }
-            // Rohan's photos replace the built-in set entirely; the built-ins are only a fallback
-            // for an empty folder, so the screen is never blank.
-            val all: List<Photo> = own.ifEmpty { photoRepo.builtins }
+            // Sean's fork: the built-in photo (his cat) always stays; pushed photos join it. With
+            // rotation Never (the default) the wall only changes via Customize or `homectl photo`.
+            val all: List<Photo> = photoRepo.builtins + own
             // New own photos start switched on.
             val seen = store.photosSeen()
             val fresh = own.map { it.id }.filter { it !in seen }
@@ -543,6 +591,9 @@ class FoyerModel(
     enum class MenuItem(val text: String) { Move("Move"), Add("Add to Home"), Remove("Remove from Home"), Hide("Hide") }
 
     companion object {
+        /** The model on screen, if MainActivity exists. Main thread only; ControlReceiver pokes it. */
+        var live: FoyerModel? = null
+
         const val FADE_PHOTO = 1800
         const val FADE_PREVIEW = 700
         const val FADE_SHARPEN = 320

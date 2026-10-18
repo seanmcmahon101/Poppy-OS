@@ -7,7 +7,7 @@ import androidx.compose.ui.geometry.Rect
 class Targets {
     private val tiles = HashMap<String, FocusRequester>()
     private val minis = HashMap<String, FocusRequester>()
-    val top = List(3) { FocusRequester() }
+    val top = List(2) { FocusRequester() } // Customize, Settings
     /** Tile and mini bounds in root px, for anchoring the app menu. Keys "s:pkg" and "a:pkg". */
     val bounds = HashMap<String, Rect>()
     /** The app last focused in All apps. */

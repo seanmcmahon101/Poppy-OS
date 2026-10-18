@@ -32,6 +32,7 @@ class MainActivity : ComponentActivity() {
         platform = AndroidPlatform(applicationContext)
         model = FoyerModel(applicationContext, platform, lifecycleScope)
         model.start()
+        FoyerModel.live = model
         setContent { FoyerScreen(model, BuildConfig.IS_DEV) }
 
         // This is home: Back never leaves it (the UI consumes Back first; this is the backstop).
@@ -56,9 +57,11 @@ class MainActivity : ComponentActivity() {
         })
         if (started) model.resume() else model.tick()
         started = true
+        model.visible = true
     }
 
     override fun onStop() {
+        model.visible = false
         unregisterReceiver(timeReceiver)
         super.onStop()
         // Foyer stops once Amazon's Settings screen is in front: that's the moment to hop to the
@@ -84,6 +87,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onDestroy() {
         unregisterReceiver(packageReceiver)
+        if (FoyerModel.live === model) FoyerModel.live = null
         super.onDestroy()
     }
 }

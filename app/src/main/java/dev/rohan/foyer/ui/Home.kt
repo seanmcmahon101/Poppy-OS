@@ -20,7 +20,6 @@ import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEventType
@@ -41,7 +40,6 @@ import dev.rohan.foyer.Overlay
 @Composable
 fun FoyerScreen(model: FoyerModel, isDev: Boolean) {
     val targets = remember { Targets() }
-    val inputsFocus = remember { FocusRequester() }
     val customizeFocus = remember { FocusRequester() }
     val menuFocus = remember { FocusRequester() }
     var rootSize by remember { mutableStateOf(IntSize.Zero) }
@@ -96,7 +94,6 @@ fun FoyerScreen(model: FoyerModel, isDev: Boolean) {
                 val pkg = targets.gridPkg?.takeIf { p -> apps.any { it.pkg == p } } ?: apps.firstOrNull()?.pkg
                 if (pkg != null) targets.mini(pkg).tryFocus()
             }
-            Overlay.Inputs -> inputsFocus.tryFocus()
             Overlay.Customize -> customizeFocus.tryFocus()
             is Overlay.Menu -> menuFocus.tryFocus()
         }
@@ -125,14 +122,14 @@ fun FoyerScreen(model: FoyerModel, isDev: Boolean) {
             else maxOf(allSheetH * allSlide.value, customizeSheetH * customizeSlide.value)
         })
 
-        ClockBlock(model.now, isDev)
+        ClockBlock(model, isDev)
 
         TopBar(
             model = model,
             targets = targets,
             backdrop = backdrop,
             enabled = homeEnabled,
-            active = if (overlay == Overlay.Inputs) 0 else if (customizeUp) 1 else null,
+            active = if (customizeUp) 0 else null,
             onDown = {
                 val shelf = model.shelf
                 if (shelf.isEmpty()) { targets.gridPkg = null; model.openAllApps() }
@@ -173,10 +170,6 @@ fun FoyerScreen(model: FoyerModel, isDev: Boolean) {
                 model = model, backdrop = backdrop, shown = { customizeSlide.value }, firstFocus = customizeFocus,
                 modifier = Modifier.align(Alignment.BottomCenter).onSizeChanged { customizeSheetH = it.height },
             )
-        }
-
-        Pop(if (overlay == Overlay.Inputs) Unit else null, origin = TransformOrigin(1f, 0f)) { _, layer ->
-            InputsPanel(model, backdrop, inputsFocus, layer, Modifier.align(Alignment.TopEnd))
         }
 
         Pop(menu) { m, layer ->

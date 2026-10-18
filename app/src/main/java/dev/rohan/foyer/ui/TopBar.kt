@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -18,6 +19,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -36,27 +38,52 @@ import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.dp
 import dev.rohan.foyer.FoyerModel
 import dev.rohan.foyer.R
+import kotlinx.coroutines.delay
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 
-/** Clock (88 sp Light, 24-hour) and date; the dev build adds an amber "dev" tag. */
+/**
+ * Centred at the top: HH:mm:ss (or HH:mm with `homectl set seconds off`) in Google Sans Flex Light
+ * with tabular figures, so the digits don't shuffle as they change; the date under it is optional
+ * (`homectl set date on`). The dev build adds an amber "dev" tag.
+ *
+ * The seconds tick only while Foyer is on screen ([FoyerModel.visible]), each one landing on the
+ * second boundary. The clock sits in its own layer, so a tick repaints only the clock's rectangle.
+ */
 @Composable
-fun ClockBlock(now: Long, isDev: Boolean, modifier: Modifier = Modifier) {
-    val time = remember { SimpleDateFormat("H:mm", Locale.getDefault()) }
+fun ClockBlock(model: FoyerModel, isDev: Boolean, modifier: Modifier = Modifier) {
+    val seconds = model.clockSeconds
+    val time = remember(seconds) { SimpleDateFormat(if (seconds) "HH:mm:ss" else "HH:mm", Locale.getDefault()) }
     val day = remember { SimpleDateFormat("EEEE d MMMM", Locale.getDefault()) }
+    var now by remember { mutableLongStateOf(model.now) }
+    LaunchedEffect(model.visible, seconds, model.now) {
+        // Off screen (and in tests) the model's clock is the truth; on screen, tick on real seconds.
+        if (!model.visible) { now = model.now; return@LaunchedEffect }
+        now = System.currentTimeMillis()
+        val step = if (seconds) 1_000L else 60_000L
+        while (true) {
+            delay(step - System.currentTimeMillis() % step + 5)
+            now = System.currentTimeMillis()
+        }
+    }
     val date = Date(now)
     // The formatters keep the zone they were made in; follow the TV's current zone (ACTION_TIMEZONE_CHANGED ticks us).
     val zone = java.util.TimeZone.getDefault()
     time.timeZone = zone
     day.timeZone = zone
-    Column(modifier.padding(start = Dims.Margin, top = Dims.ClockTop)) {
+    Column(
+        modifier.fillMaxWidth().padding(top = Dims.ClockTop).graphicsLayer(),
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
         BasicText(time.format(date), style = Type.Clock, modifier = Modifier.testTag("clock"))
-        Row(Modifier.padding(top = 7.dp)) {
-            BasicText(day.format(date), style = Type.Date, modifier = Modifier.alignByBaseline())
-            if (isDev) {
-                Spacer(Modifier.width(6.dp))
-                BasicText("dev", style = Type.DevTag, modifier = Modifier.alignByBaseline().testTag("devTag"))
+        if (model.clockDate || isDev) {
+            Row(Modifier.padding(top = 4.dp)) {
+                if (model.clockDate) BasicText(day.format(date), style = Type.Date, modifier = Modifier.alignByBaseline().testTag("date"))
+                if (isDev) {
+                    Spacer(Modifier.width(6.dp))
+                    BasicText("dev", style = Type.DevTag, modifier = Modifier.alignByBaseline().testTag("devTag"))
+                }
             }
         }
     }
@@ -65,12 +92,11 @@ fun ClockBlock(now: Long, isDev: Boolean, modifier: Modifier = Modifier) {
 private data class TopAction(val icon: Int, val label: String, val tag: String)
 
 private val actions = listOf(
-    TopAction(R.drawable.ic_input, "Inputs", "top:inputs"),
     TopAction(R.drawable.ic_tune, "Customize", "top:customize"),
     TopAction(R.drawable.ic_settings, "Settings", "top:settings"),
 )
 
-/** Inputs, Customize, Settings: round glass buttons, right-aligned to the margin. */
+/** Customize, Settings: round glass buttons, right-aligned to the margin. */
 @Composable
 fun TopBar(
     model: FoyerModel,
@@ -93,20 +119,19 @@ fun TopBar(
                 enabled = enabled,
                 modifier = Modifier.focusRequester(targets.top[i]),
                 // Only remember which button; whether the user is "in" the top bar is set by the
-                // Up press itself. Android drops initial focus on the first focusable (Inputs)
+                // Up press itself. Android drops initial focus on the first focusable (Customize)
                 // when the window gains focus, and that must not count as the user going up.
                 onFocus = { model.topIndex = i },
                 onClick = {
                     when (i) {
-                        0 -> model.openInputs()
-                        1 -> model.openCustomize()
+                        0 -> model.openCustomize()
                         else -> model.openSettings()
                     }
                 },
                 onDpad = { d ->
                     when (d) {
                         Dpad.Left -> if (i > 0) targets.top[i - 1].tryFocus()
-                        Dpad.Right -> if (i < 2) targets.top[i + 1].tryFocus()
+                        Dpad.Right -> if (i < actions.size - 1) targets.top[i + 1].tryFocus()
                         Dpad.Down -> onDown()
                         Dpad.Up -> Unit
                     }

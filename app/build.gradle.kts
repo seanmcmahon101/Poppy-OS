@@ -18,12 +18,12 @@ android {
     compileSdk = 37
 
     defaultConfig {
-        applicationId = "dev.rohan.foyer"
+        applicationId = "com.sean.foyer" // Sean's fork; code keeps upstream's dev.rohan.foyer package so merges stay clean
         minSdk = 30 // Fire OS 8 = Android 11
         targetSdk = 36
-        versionCode = 1
-        versionName = "1.0"
-        ndk { abiFilters += "armeabi-v7a" } // the TV is 32-bit only
+        versionCode = 2
+        versionName = "1.1-sean"
+        ndk { abiFilters += "armeabi-v7a" } // both of Sean's sticks run a 32-bit userspace
         buildConfigField("boolean", "IS_DEV", "false")
         resValue("string", "app_name", "Foyer")
         manifestPlaceholders["banner"] = "@drawable/banner"
