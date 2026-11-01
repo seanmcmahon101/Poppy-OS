@@ -16,7 +16,7 @@ import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.core.graphics.ColorUtils
 import androidx.core.graphics.drawable.toBitmap
-import dev.rohan.foyer.R
+import java.io.File
 
 /** What a tile shows. */
 sealed interface Art {
@@ -67,14 +67,15 @@ class AndroidPlatform(private val context: Context) : Platform {
             .filter { !AppRules.isBlocked(it.activityInfo.packageName) }
             .map { ri ->
                 val pkg = ri.activityInfo.packageName
-                App(pkg, AppRules.label(pkg, runCatching { ri.loadLabel(pm).toString() }.getOrNull()))
+                App(pkg, AppRules.label(pkg) { runCatching { ri.loadLabel(pm).toString() }.getOrNull() })
             }
     }
 
+    /** Pushed art (`homectl art`), then bundled art, then the app's banner, then its icon on a colour. */
     override fun art(app: App): Art {
-        AppRules.artKey(app.pkg)?.let { _ ->
-            val id = bundledArt(context, app.pkg)
-            if (id != null) Images.resource(context.resources, id, Images.ART_W, Images.ART_H)?.let { return Art.Picture(it.asImageBitmap()) }
+        customArt(app.pkg)?.let { f -> Images.artFile(f)?.let { return Art.Picture(it.asImageBitmap()) } }
+        bundledArt(context, app.pkg)?.let { id ->
+            Images.resource(context.resources, id, Images.ART_W, Images.ART_H)?.let { return Art.Picture(it.asImageBitmap()) }
         }
         val banner = runCatching {
             val launch = pm.getLeanbackLaunchIntentForPackage(app.pkg)
@@ -166,15 +167,42 @@ class AndroidPlatform(private val context: Context) : Platform {
         private val artIds = java.util.concurrent.ConcurrentHashMap<String, Int>()
 
         /**
-         * Optional brand art: an art_<key> drawable from app/local/res, which stays out of git because
-         * the logos belong to their owners. Found by name, since a checkout may have none of it;
-         * res/raw/keep.xml stops the resource shrinker from dropping it. Null means "use the banner".
+         * Optional brand art: an art_<key> drawable from app/local/res (see [AppRules.artKey]), which
+         * stays out of git because the logos belong to their owners. Found by name, since a checkout
+         * may have none of it; res/raw/keep.xml stops the resource shrinker from dropping it. Null
+         * means "use the banner".
          */
         @android.annotation.SuppressLint("DiscouragedApi")
         fun bundledArt(context: Context, pkg: String): Int? {
-            val key = AppRules.artKey(pkg) ?: return null
+            val key = AppRules.artKey(pkg)
             return artIds.getOrPut(key) { context.resources.getIdentifier("art_$key", "drawable", context.packageName) }
                 .takeIf { it != 0 }
         }
+
+        private val ART_EXT = setOf("jpg", "jpeg", "png", "webp")
+        private var artStamp = -1L
+        private var artFiles: Map<String, File> = emptyMap()
+
+        /**
+         * Tile art pushed over adb: /sdcard/Pictures/Foyer/art/<package>.jpg (or .png, .webp), read
+         * with the photo permission Foyer already has. The folder is listed once and again only when
+         * its modified time moves, so asking for every app on a cold start costs one listing.
+         */
+        @Synchronized
+        fun customArt(pkg: String): File? {
+            val dir = PhotoRepository.artFolder()
+            val stamp = dir.lastModified() // 0 while the folder doesn't exist
+            if (stamp != artStamp) {
+                artFiles = dir.listFiles().orEmpty()
+                    .filter { it.isFile && it.extension.lowercase() in ART_EXT }
+                    .associateBy { it.nameWithoutExtension }
+                artStamp = stamp
+            }
+            return artFiles[pkg]
+        }
+
+        /** `homectl art` just changed the folder: list it again next time, whatever its time says. */
+        @Synchronized
+        fun forgetCustomArt() { artStamp = -1L }
     }
 }

@@ -67,6 +67,10 @@ fun FoyerScreen(model: FoyerModel, isDev: Boolean) {
     }
     LaunchedEffect(customizeUp) { customizeSlide.animateTo(if (customizeUp) 1f else 0f, tween(550, easing = Motion.Glide)) }
     val customizeComposed by remember { derivedStateOf { customizeSlide.value > 0f } }
+    // The drawer is built one frame after the first: the cold-start frame builds only what's on
+    // screen, and from then on the drawer waits below the screen, so Down only slides it up.
+    var drawerReady by remember { mutableStateOf(false) }
+    LaunchedEffect(Unit) { withFrameNanos { }; drawerReady = true }
 
     // Night warmth: animated outside composition, read only at draw time.
     LaunchedEffect(model.nightOn) {
@@ -156,9 +160,9 @@ fun FoyerScreen(model: FoyerModel, isDev: Boolean) {
             },
         )
 
-        // Always composed once there are apps, parked below the screen: Down only slides it up,
-        // instead of building 20 tiles in the first frame of the animation.
-        if (model.allApps.isNotEmpty()) {
+        // Composed once there are apps (and the first frame is out), parked below the screen: Down
+        // only slides it up, instead of building 20 tiles in the first frame of the animation.
+        if (model.allApps.isNotEmpty() && (drawerReady || allAppsUp)) {
             AllAppsSheet(
                 model = model, targets = targets, backdrop = backdrop,
                 shown = { allSlide.value }, enabled = overlay == Overlay.AllApps,
@@ -173,7 +177,7 @@ fun FoyerScreen(model: FoyerModel, isDev: Boolean) {
         }
 
         Pop(menu) { m, layer ->
-            val anchor = targets.bounds[(if (m.fromShelf) "s:" else "a:") + m.pkg]
+            val anchor = targets.bounds((if (m.fromShelf) "s:" else "a:") + m.pkg)
             AppMenu(model, m, anchor, backdrop, menuFocus, layer)
         }
 

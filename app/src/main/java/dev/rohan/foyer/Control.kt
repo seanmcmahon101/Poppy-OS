@@ -9,8 +9,7 @@ import dev.rohan.foyer.data.App
 import dev.rohan.foyer.data.AppRules
 import dev.rohan.foyer.data.Layout
 import dev.rohan.foyer.data.LayoutStore
-import dev.rohan.foyer.data.NightMode
-import dev.rohan.foyer.data.Rotation
+import dev.rohan.foyer.data.Settings
 import org.json.JSONArray
 import org.json.JSONObject
 
@@ -21,7 +20,7 @@ import org.json.JSONObject
  *
  *   adb shell am broadcast -n com.sean.foyer/dev.rohan.foyer.ControlReceiver --es cmd get
  *
- * launcher/homectl wraps this. Commands work whether or not Foyer is on screen: they write
+ * homectl wraps this. Commands work whether or not Foyer is on screen: they write
  * LayoutStore, and a running Foyer re-reads it (FoyerModel.reload). Only photo/rescan/ui need it running.
  */
 class ControlReceiver : BroadcastReceiver() {
@@ -43,6 +42,13 @@ class ControlError(message: String) : Exception(message)
 class Control(private val context: Context) {
     private val store = LayoutStore(context)
     private val platform = AndroidPlatform(context)
+
+    init {
+        // A broadcast can start Foyer's process without MainActivity, so FoyerModel never set these:
+        // without them `homectl add NOW` couldn't find an app by the name its tile shows.
+        AppRules.userLabels = store.labels
+    }
+
     private val apps: List<App> by lazy { AppRules.alphabetical(platform.scanApps()) }
 
     fun run(i: Intent): String {
@@ -55,18 +61,27 @@ class Control(private val context: Context) {
             "config" -> config().toString(2)
             "apps" -> apps.joinToString("\n") { "${it.pkg}\t${it.label}" }
             "apply" -> {
-                val b64 = i.getStringExtra("b64") ?: throw ControlError("apply needs --es b64 <base64 json>")
-                val json = runCatching { JSONObject(String(Base64.decode(b64, Base64.DEFAULT), Charsets.UTF_8)) }
-                    .getOrElse { throw ControlError("not valid json: ${it.message}") }
-                apply(json)
+                write(settings(file(i, "apply"), whenBad = "nothing was changed"))
                 changed()
                 config().toString(2)
             }
+            "diff" -> {
+                val d = current().diff(settings(file(i, "diff")))
+                if (d.isEmpty()) "in sync" else "${d.size} difference${if (d.size == 1) "" else "s"} (TV vs file):\n" + d.joinToString("\n")
+            }
             "set" -> {
                 val key = need(arg, "set <key> <value>")
-                apply(setting(key, need(arg2, "set $key <value>")))
+                write(settings(setting(key, need(arg2, "set $key <value>"))))
                 changed()
                 config().toString(2)
+            }
+            "which" -> pkg(need(arg, "which <app>"))
+            "art" -> {
+                // `homectl art` has just pushed or removed /sdcard/Pictures/Foyer/art/<package>.*
+                val p = arg?.takeIf { it.isNotBlank() }?.let(::pkg)
+                AndroidPlatform.forgetCustomArt()
+                FoyerModel.live?.reloadArt(p)
+                p ?: "all apps"
             }
             "add" -> shelf(arg) { l, p ->
                 val added = l.addToShelf(p)
@@ -149,59 +164,62 @@ class Control(private val context: Context) {
             if (hits.size == 1) return hits[0].pkg
             if (hits.size > 1) throw ControlError("'$s' matches ${hits.size} apps:\n" + hits.joinToString("\n") { "  ${it.pkg}\t${it.label}" })
         }
-        if (Regex("^[A-Za-z][\\w]*(\\.[\\w]+)+$").matches(s)) return s
+        if (AppRules.looksLikePackage(s)) return s
         throw ControlError("no app matches '$s' (see: homectl apps)")
     }
 
     // ---- config ---------------------------------------------------------------------------------
 
-    /** The same shape as launcher/config.json. */
-    fun config(): JSONObject {
+    /** The TV's settings, every part set. */
+    private fun current(): Settings {
         val l = layout()
-        return JSONObject()
-            .put("shelf", JSONArray(l.shelf))
-            .put("hidden", JSONArray(l.hidden.sorted()))
-            .put("labels", JSONObject(store.labels.toSortedMap() as Map<*, *>))
-            .put("clock", JSONObject().put("seconds", store.clockSeconds).put("date", store.clockDate))
-            .put("night", JSONObject().put("mode", store.night.name).put("from", store.nightFrom).put("to", store.nightTo))
-            .put("photos", JSONObject().put("rotation", store.rotation.name))
+        return Settings(
+            shelf = l.shelf, hidden = l.hidden, labels = store.labels,
+            seconds = store.clockSeconds, date = store.clockDate,
+            night = store.night, nightFrom = store.nightFrom, nightTo = store.nightTo,
+            rotation = store.rotation,
+        )
     }
 
-    /** Each top-level key present replaces that part of the settings; absent keys are left alone. */
-    fun apply(j: JSONObject) {
-        val unknown = j.keys().asSequence().toList() - setOf("shelf", "hidden", "labels", "clock", "night", "photos", "\$comment")
-        if (unknown.isNotEmpty()) throw ControlError("unknown key(s) ${unknown.joinToString()}; allowed: shelf hidden labels clock night photos")
-        if (j.has("shelf") || j.has("hidden")) {
+    /** Exactly config.json's shape, comment included, so `homectl pull` round-trips the file. */
+    fun config(): JSONObject = current().toJson(Settings.COMMENT)
+
+    /** A whole settings file, checked; [whenBad] is added to the error. */
+    private fun settings(j: JSONObject, whenBad: String? = null): Settings = try {
+        Settings.parse(j)
+    } catch (e: IllegalArgumentException) {
+        throw ControlError(listOfNotNull(e.message, whenBad).joinToString("\n"))
+    }
+
+    /** The json sent as `--es b64 <base64>` (homectl apply/diff). */
+    private fun file(i: Intent, cmd: String): JSONObject {
+        val b64 = i.getStringExtra("b64") ?: throw ControlError("$cmd needs --es b64 <base64 json>")
+        return runCatching { JSONObject(String(Base64.decode(b64, Base64.DEFAULT), Charsets.UTF_8)) }
+            .getOrElse { throw ControlError("not valid json: ${it.message}") }
+    }
+
+    /** Writes the parts [s] names; the rest stay as they are. [s] is already checked, so this can't half-apply. */
+    private fun write(s: Settings) {
+        if (s.shelf != null || s.hidden != null) {
             val l = layout()
-            store.saveLayout(
-                Layout(
-                    shelf = if (j.has("shelf")) strings(j.getJSONArray("shelf")).distinct() else l.shelf,
-                    hidden = if (j.has("hidden")) strings(j.getJSONArray("hidden")).toSet() else l.hidden,
-                )
-            )
+            store.saveLayout(Layout(shelf = s.shelf ?: l.shelf, hidden = s.hidden ?: l.hidden))
         }
-        j.optJSONObject("labels")?.let { o -> store.labels = o.keys().asSequence().associateWith { o.getString(it) } }
-        j.optJSONObject("clock")?.let { o ->
-            if (o.has("seconds")) store.clockSeconds = o.getBoolean("seconds")
-            if (o.has("date")) store.clockDate = o.getBoolean("date")
-        }
-        j.optJSONObject("night")?.let { o ->
-            if (o.has("mode")) store.night = enumOf<NightMode>(o.getString("mode"))
-            if (o.has("from")) store.nightFrom = hour(o.getInt("from"))
-            if (o.has("to")) store.nightTo = hour(o.getInt("to"))
-        }
-        j.optJSONObject("photos")?.let { o ->
-            if (o.has("rotation")) store.rotation = enumOf<Rotation>(o.getString("rotation"))
-        }
+        s.labels?.let { store.labels = it }
+        s.seconds?.let { store.clockSeconds = it }
+        s.date?.let { store.clockDate = it }
+        s.night?.let { store.night = it }
+        s.nightFrom?.let { store.nightFrom = it }
+        s.nightTo?.let { store.nightTo = it }
+        s.rotation?.let { store.rotation = it }
     }
 
-    /** `homectl set <key> <value>` as a config fragment. */
+    /** `homectl set <key> <value>` as a config fragment; [Settings.parse] checks the value. */
     private fun setting(key: String, v: String): JSONObject = when (key) {
         "seconds" -> JSONObject().put("clock", JSONObject().put("seconds", bool(v)))
         "date" -> JSONObject().put("clock", JSONObject().put("date", bool(v)))
         "night" -> JSONObject().put("night", JSONObject().put("mode", v))
-        "night_from" -> JSONObject().put("night", JSONObject().put("from", v.toIntOrNull() ?: throw ControlError("hour 0-23")))
-        "night_to" -> JSONObject().put("night", JSONObject().put("to", v.toIntOrNull() ?: throw ControlError("hour 0-23")))
+        "night_from" -> JSONObject().put("night", JSONObject().put("from", v.toIntOrNull() ?: v))
+        "night_to" -> JSONObject().put("night", JSONObject().put("to", v.toIntOrNull() ?: v))
         "rotation" -> JSONObject().put("photos", JSONObject().put("rotation", v))
         else -> throw ControlError("set takes seconds, date, night, night_from, night_to or rotation")
     }
@@ -228,7 +246,7 @@ class Control(private val context: Context) {
                     is Overlay.Menu -> "menu"
                 })
                 .put("nightOn", m?.nightOn))
-            .put("config", config())
+            .put("config", current().toJson())
             .put("homeRow", JSONArray(visible.map { JSONObject().put("pkg", it).put("label", byPkg[it]?.label) }))
             .put("notInstalled", JSONArray(l.shelf.filter { it !in inst }))
             .put("apps", JSONArray(apps.map { a ->
@@ -254,32 +272,27 @@ class Control(private val context: Context) {
 
     private fun need(v: String?, usage: String): String = v?.takeIf { it.isNotBlank() } ?: throw ControlError("usage: $usage")
 
-    private fun strings(a: JSONArray): List<String> = List(a.length()) { a.getString(it).trim() }.filter { it.isNotEmpty() }
-
     private fun bool(v: String): Boolean = when (v.lowercase()) {
         "on", "true", "yes", "1" -> true
         "off", "false", "no", "0" -> false
         else -> throw ControlError("expected on/off, got '$v'")
     }
 
-    private fun hour(h: Int): Int = h.takeIf { it in 0..23 } ?: throw ControlError("hour must be 0-23, got $h")
-
-    private inline fun <reified E : Enum<E>> enumOf(v: String): E =
-        enumValues<E>().firstOrNull { it.name.equals(v, ignoreCase = true) }
-            ?: throw ControlError("'$v' isn't one of ${enumValues<E>().joinToString { it.name }}")
-
     companion object {
-        const val HELP = """Foyer over adb (launcher/homectl wraps these):
+        const val HELP = """Foyer over adb (homectl wraps these):
   get                       everything: settings, home row, apps, photos, what's on screen
-  config                    settings only, in launcher/config.json's shape
+  config                    settings only, in config.json's shape
   apps                      installed apps: package <tab> label
-  apply  (b64=<json>)       replace the parts of the settings named in the json
+  apply  (b64=<json>)       replace the parts of the settings named in the json; a bad value changes nothing
+  diff   (b64=<json>)       what apply would change: "in sync", or one line per difference
   set <key> <value>         seconds on|off, date on|off, night Auto|Always|Off, night_from 0-23, night_to 0-23, rotation Never|FiveMinutes|Hourly|Daily
   add <app> [position]      put an app on the home row (end, or 1-based position)
   remove <app>              take it off the home row
   move <app> <position>     move it along the home row
   hide <app> / unhide <app> hide from All apps (and the row) / bring back
   label <app> [name]        rename a tile; no name clears it
+  which <app>               the package an app name resolves to
+  art [app]                 re-read tile art (after pushing /sdcard/Pictures/Foyer/art/<package>.jpg)
   launch <app>              open an app
   photo next|<name>         change the wallpaper now            (Foyer must be running)
   rescan                    re-read apps, photos and settings   (Foyer must be running)

@@ -26,9 +26,8 @@ import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.ColorFilter
 import androidx.compose.ui.graphics.graphicsLayer
-import androidx.compose.ui.layout.boundsInRoot
 import androidx.compose.ui.layout.layout
-import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.onPlaced
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.unit.Constraints
@@ -182,7 +181,7 @@ private fun ShelfTile(
         Modifier
             .offset { IntOffset(x().roundToInt(), y.roundToPx()) }
             .size(Dims.TileW, Dims.TileH)
-            .onGloballyPositioned { targets.bounds["s:${app.pkg}"] = it.boundsInRoot() }
+            .onPlaced { targets.placed["s:${app.pkg}"] = it }
             .graphicsLayer {
                 val p = f.value
                 val s = 1f + 0.13f * p

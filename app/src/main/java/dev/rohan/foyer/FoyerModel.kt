@@ -29,10 +29,12 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
-import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import java.util.Calendar
@@ -82,6 +84,12 @@ class FoyerModel(
     val hiddenApps: List<App> by derivedStateOf { AppRules.alphabetical(installed.filter { it.pkg in layout.hidden }) }
 
     val art = mutableStateMapOf<String, Art>()
+    /** Packages whose art is decoding right now, so overlapping requests never decode one twice. */
+    private val artLoading = HashSet<String>()
+    /** A few art decodes at once: quicker than one by one, without taking every core from the UI. */
+    private val artLanes = Semaphore(ART_PARALLELISM)
+    private var appsJob: Job? = null
+    private var rescanJob: Job? = null
 
     // ---- UI state ---------------------------------------------------------------------------
     var overlay by mutableStateOf<Overlay>(Overlay.None)
@@ -144,14 +152,17 @@ class FoyerModel(
     private var currentId: String = store.currentPhoto ?: photoRepo.builtins.first().id
     private var wallJob: Job? = null
     private var previewJob: Job? = null
-    private val frostCache = HashMap<String, ImageBitmap>()
+    /** The last few frosted copies; the least recently shown goes first. */
+    private val frostCache = object : LinkedHashMap<String, ImageBitmap>(16, 0.75f, true) {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, ImageBitmap>?) = size > FROST_CACHE
+    }
 
     // =========================================================================================
     // Lifecycle
 
     /** Called once. Shows whatever is cached immediately, then refreshes. */
     fun start() {
-        // Rohan's own photos are known only after a scan; built-ins can show right away.
+        // Pushed photos are known only after a scan; built-ins can show right away.
         if (photo(currentId) != null) showPhoto(currentId, fadeMs = FADE_PHOTO)
         loadArt(shelf + allApps)
         refreshApps()
@@ -231,8 +242,14 @@ class FoyerModel(
         restoreShelfArt()
         loadArt(allApps)
         rotateIfDue(visible = false)
-        refreshApps()
-        refreshPhotos()
+        // Package changes arrive as broadcasts and adb changes call reload(), so these rescans are
+        // only a backstop: they wait until the return to Foyer has had the CPU to itself.
+        rescanJob?.cancel()
+        rescanJob = scope.launch {
+            delay(RESCAN_AFTER_RESUME_MS)
+            refreshApps()
+            refreshPhotos()
+        }
     }
 
     /** onTrimMemory(UI_HIDDEN): keep only the tiny frosted copy. */
@@ -247,12 +264,7 @@ class FoyerModel(
         thumbs.clear()
         scope.launch {
             delay(RETIRE_AFTER_MS)
-            oldArt.forEach { a ->
-                when (a) {
-                    is Art.Picture -> if (art.values.none { it === a }) runCatching { a.bitmap.asAndroidBitmap().recycle() }
-                    is Art.Generated -> a.icon?.let { i -> if (art.values.none { it === a }) runCatching { i.asAndroidBitmap().recycle() } }
-                }
-            }
+            oldArt.forEach { a -> if (art.values.none { it === a }) a.recycle() }
             oldThumbs.forEach { t -> if (thumbs.values.none { it === t }) runCatching { t.asAndroidBitmap().recycle() } }
         }
     }
@@ -269,7 +281,7 @@ class FoyerModel(
     fun tick() {
         now = clock()
         rotateIfDue(visible = true)
-        // Photos Iris sends show up within a minute, even while Foyer stays in front.
+        // Photos pushed with `homectl wall` show up within a minute, even while Foyer stays in front.
         refreshPhotos()
     }
 
@@ -294,28 +306,99 @@ class FoyerModel(
         }
     }
 
+    /**
+     * Decodes art for [apps] that has none yet, in order (the shelf first), a few at a time. A
+     * package already decoding is skipped: the first app scan lands while start()'s load is still
+     * going, and used to decode every tile a second time.
+     */
     private fun loadArt(apps: List<App>) {
-        val missing = apps.filter { it.pkg !in art }.distinctBy { it.pkg }
-        if (missing.isEmpty()) return
-        scope.launch {
-            for (app in missing) {
-                if (app.pkg in art) continue
-                val a = withContext(io) { runCatching { platform.art(app) }.getOrNull() } ?: continue
-                art[app.pkg] = a
+        for (app in apps) {
+            val pkg = app.pkg
+            if (pkg in art || !artLoading.add(pkg)) continue
+            scope.launch {
+                try {
+                    val a = artLanes.withPermit { decodeArt(app) } ?: return@launch
+                    if (pkg in art) a.recycle() else art[pkg] = a
+                } finally {
+                    artLoading -= pkg
+                }
             }
         }
     }
 
-    /** Decodes shelf art in parallel and waits briefly, so a warm return shows complete tiles. */
+    private suspend fun decodeArt(app: App): Art? = withContext(io) { runCatching { platform.art(app) }.getOrNull() }
+
+    /**
+     * Decodes shelf art in parallel and waits briefly, so a warm return shows complete tiles. The
+     * decodes belong to [scope], not to the wait, so [ART_WAIT_MS] really bounds the main thread
+     * (as children of the timeout they kept it blocked until the last one finished), and art that
+     * takes longer still lands the moment it's ready.
+     */
     private fun restoreShelfArt() {
-        val missing = shelf.filter { it.pkg !in art }
+        val missing = shelf.filter { it.pkg !in art && it.pkg !in artLoading }
         if (missing.isEmpty()) return
-        val loaded = runBlocking {
-            withTimeoutOrNull(ART_WAIT_MS) {
-                missing.map { app -> async(io) { app.pkg to runCatching { platform.art(app) }.getOrNull() } }.awaitAll()
+        val pending = missing.map { app ->
+            artLoading += app.pkg
+            app.pkg to scope.async(io) { runCatching { platform.art(app) }.getOrNull() }
+        }
+        runBlocking { withTimeoutOrNull(ART_WAIT_MS) { pending.forEach { it.second.join() } } }
+        for ((pkg, decoding) in pending) {
+            // Main.immediate: art that's already decoded is in place before this returns.
+            scope.launch {
+                try {
+                    decoding.await()?.let { a -> if (pkg in art) a.recycle() else art[pkg] = a }
+                } finally {
+                    artLoading -= pkg
+                }
             }
         }
-        loaded?.forEach { (pkg, a) -> if (a != null) art[pkg] = a }
+    }
+
+    /**
+     * Decodes tile art again after it changed underneath: `homectl art`, an app update with a new
+     * banner. [pkg] null means every app. The old art stays up until the new art is ready.
+     */
+    fun reloadArt(pkg: String? = null) {
+        val apps = (shelf + allApps + hiddenApps).distinctBy { it.pkg }.filter { pkg == null || it.pkg == pkg }
+        for (app in apps) {
+            scope.launch {
+                val a = artLanes.withPermit { decodeArt(app) } ?: return@launch
+                val old = art.put(app.pkg, a)
+                if (old != null && old !== a) retireArt(old)
+            }
+        }
+    }
+
+    /**
+     * MainActivity's package broadcast. One app update sends several (removed, added, replaced),
+     * so the app scan waits a moment and covers them all.
+     */
+    fun onPackageEvent(pkg: String?, removed: Boolean, updated: Boolean) {
+        if (pkg != null) {
+            if (removed) art.remove(pkg)?.let(::retireArt)
+            else if (updated && pkg in art) reloadArt(pkg)
+        }
+        appsJob?.cancel()
+        appsJob = scope.launch {
+            delay(PACKAGE_SCAN_DEBOUNCE_MS)
+            refreshApps()
+        }
+    }
+
+    /** Frees art once nothing can still be drawing it (see [retire]). */
+    private fun retireArt(old: Art) {
+        scope.launch {
+            delay(RETIRE_AFTER_MS)
+            if (art.values.none { it === old }) old.recycle()
+        }
+    }
+
+    /** Frees an Art's graphics memory. Only for art that isn't, or never was, on screen. */
+    private fun Art.recycle() {
+        when (this) {
+            is Art.Picture -> runCatching { bitmap.asAndroidBitmap().recycle() }
+            is Art.Generated -> icon?.let { runCatching { it.asAndroidBitmap().recycle() } }
+        }
     }
 
     fun launch(app: App) {
@@ -474,11 +557,16 @@ class FoyerModel(
     private fun showPhoto(id: String, fadeMs: Int, onPreview: Boolean = false) {
         val p = photo(id) ?: photos.first()
         val job = scope.launch {
+            // The full photo and the frosted copy decode side by side: on a cold start, that's the
+            // wait before the first photo. A full decode that's no longer wanted is freed at once
+            // (8 MB of graphics memory) instead of waiting for the garbage collector.
+            val full = async(io) { photoRepo.full(p).let { b -> if (isActive) b else { b?.recycle(); null } } }
             val frost = frostCache[p.id] ?: withContext(io) {
                 photoRepo.small(p)?.let { small -> frostedCopy(small).also { small.recycle() }.asImageBitmap() }
-            }?.also { remember(p.id, it) } ?: return@launch
-            val full = withContext(io) { photoRepo.full(p) }?.asImageBitmap()
-            publish(Wall(p, full, frost, fadeMs))
+            }?.also { remember(p.id, it) }
+            val bmp = full.await()
+            if (frost == null) { bmp?.recycle(); return@launch }
+            publish(Wall(p, bmp?.asImageBitmap(), frost, fadeMs))
         }
         if (onPreview) { previewJob?.cancel(); previewJob = job } else { wallJob?.cancel(); wallJob = job }
     }
@@ -502,7 +590,6 @@ class FoyerModel(
     }
 
     private fun remember(id: String, frost: ImageBitmap) {
-        if (frostCache.size >= 8) frostCache.remove(frostCache.keys.first())
         frostCache[id] = frost
     }
 
@@ -599,6 +686,11 @@ class FoyerModel(
         const val FADE_SHARPEN = 320
         const val PREVIEW_DEBOUNCE_MS = 250L
         const val ART_WAIT_MS = 150L
+        const val ART_PARALLELISM = 2
+        const val FROST_CACHE = 8
+        /** After a return to Foyer, the backstop app and photo rescans wait this long. */
+        const val RESCAN_AFTER_RESUME_MS = 1_500L
+        const val PACKAGE_SCAN_DEBOUNCE_MS = 400L
         /** Longer than any crossfade (1.8 s), so a retired bitmap is never drawn again. */
         const val RETIRE_AFTER_MS = 2_600L
     }

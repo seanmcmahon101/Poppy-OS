@@ -1,5 +1,5 @@
 {
-  "$comment": "Foyer settings. Edit, then ./homectl apply (add -t living for the Max). ./homectl pull writes the TV's live settings back here. Apps can be named before they're installed.",
+  "$comment": "Foyer settings. Edit, then homectl apply (-t living for the Max, -t all for both). homectl diff shows what differs from the TV; homectl pull saves the TV's live settings back here. Apps can be named before they're installed.",
   "shelf": [
     "com.netflix.ninja",
     "com.amazon.firebat",
@@ -13,7 +13,16 @@
     "io.github.toolicious.homeonfire"
   ],
   "labels": {},
-  "clock": { "seconds": true, "date": false },
-  "night": { "mode": "Auto", "from": 20, "to": 6 },
-  "photos": { "rotation": "Never" }
+  "clock": {
+    "seconds": true,
+    "date": false
+  },
+  "night": {
+    "mode": "Auto",
+    "from": 20,
+    "to": 6
+  },
+  "photos": {
+    "rotation": "Never"
+  }
 }
