@@ -24,7 +24,14 @@ class MainActivity : ComponentActivity() {
         override fun onReceive(c: Context, i: Intent) = model.tick()
     }
     private val packageReceiver = object : BroadcastReceiver() {
-        override fun onReceive(c: Context, i: Intent) = model.refreshApps()
+        override fun onReceive(c: Context, i: Intent) {
+            val replacing = i.getBooleanExtra(Intent.EXTRA_REPLACING, false)
+            model.onPackageEvent(
+                pkg = i.data?.schemeSpecificPart,
+                removed = i.action == Intent.ACTION_PACKAGE_REMOVED && !replacing,
+                updated = i.action == Intent.ACTION_PACKAGE_REPLACED,
+            )
+        }
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {

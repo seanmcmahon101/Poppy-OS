@@ -27,15 +27,29 @@ class PhotoRepository(private val context: Context) {
     /** Sean's cat (DSC02102, cropped 16:9 from the top, 1920x1080). Always there, no permission needed. */
     val builtins: List<Photo.Builtin> = listOf(Photo.Builtin("b:home", R.drawable.wall_default, null))
 
-    @Suppress("DEPRECATION")
-    val folder: File? get() = File(android.os.Environment.getExternalStoragePublicDirectory(android.os.Environment.DIRECTORY_PICTURES), "Foyer")
+    val folder: File? get() = PhotoRepository.folder()
     private val cacheDir: File get() = File(context.cacheDir, "walls")
 
-    /** Blocking: scans the folder, caching any new photo. Corrupt files are skipped silently. */
+    private var lastListing: String? = null
+    private var lastScan: List<Photo.Own> = emptyList()
+
+    /**
+     * Blocking: scans the folder, caching any new photo. Corrupt files are skipped silently.
+     *
+     * Runs every minute, so when nothing in the folder has changed (names, sizes and times of every
+     * entry, .txt captions included) and the cached copies are still there, it answers from memory.
+     * One scan at a time: two at once could both write the same cache file.
+     */
+    @Synchronized
     fun scanOwn(): List<Photo.Own> {
         val dir = folder ?: return emptyList()
         if (!dir.isDirectory) return emptyList()
-        val files = dir.listFiles().orEmpty()
+        val entries = dir.listFiles().orEmpty().sortedBy { it.name }
+        val listing = entries.joinToString("\n") { "${it.name}|${it.length()}|${it.lastModified()}" }
+        if (listing == lastListing && lastScan.all { it.cached.isFile }) return lastScan
+
+        val names = entries.mapTo(HashSet()) { it.name }
+        val files = entries
             .filter { it.isFile && it.extension.lowercase() in IMAGE_EXT }
             .sortedBy { it.name.lowercase() }
         cacheDir.mkdirs()
@@ -47,13 +61,15 @@ class PhotoRepository(private val context: Context) {
             if (!cached.exists() && !cache(f, cached)) continue
             keep += cached.name
             // A <name>.txt sidecar wins when Foyer can see it; otherwise the file name.
-            val caption = File(dir, f.nameWithoutExtension + ".txt").takeIf { it.isFile }
-                ?.let { runCatching { it.useLines { l -> l.firstOrNull() } }.getOrNull() }
+            val caption = "${f.nameWithoutExtension}.txt".takeIf { it in names }
+                ?.let { runCatching { File(dir, it).useLines { l -> l.firstOrNull() } }.getOrNull() }
                 ?.trim()?.takeIf { it.isNotEmpty() }
                 ?: captionFromName(f.nameWithoutExtension)
             out += Photo.Own("u:${f.name}", cached, caption)
         }
         cacheDir.listFiles().orEmpty().filter { it.name !in keep }.forEach { it.delete() }
+        lastListing = listing
+        lastScan = out
         return out
     }
 
@@ -82,6 +98,13 @@ class PhotoRepository(private val context: Context) {
         MessageDigest.getInstance("SHA-1").digest(s.toByteArray()).take(8).joinToString("") { "%02x".format(it) }
 
     companion object {
+        /** Where photos are pushed (`homectl wall`). */
+        @Suppress("DEPRECATION")
+        fun folder(): File = File(android.os.Environment.getExternalStoragePublicDirectory(android.os.Environment.DIRECTORY_PICTURES), "Foyer")
+
+        /** Where tile art is pushed (`homectl art`): <package>.jpg. Not a photo: the scan skips folders. */
+        fun artFolder(): File = File(folder(), "art")
+
         private val IMAGE_EXT = setOf("jpg", "jpeg", "png", "webp", "heic", "heif")
         private val CAMERA = Regex("^(img|pxl|dsc|dscn|dscf|dji|gopr|mvimg|vid|screenshot|screen shot|photo|image|pic|wp|whatsapp image|signal|sam|p)[ \\-]?\\d")
         private val HASHY = Regex("^[0-9a-f\\- ]{12,}$")

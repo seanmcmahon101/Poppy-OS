@@ -23,7 +23,7 @@ object AppRules {
         "io.github.toolicious.homeonfire", "com.spocky.projengmenu", "com.esaba.downloader",
     )
 
-    /** First-run shelf. After that, launcher/config.json (`homectl apply`) is the source of truth. */
+    /** First-run shelf. After that, config.json (`homectl apply`) is the source of truth. */
     val defaultShelf: List<String> = listOf(
         "com.netflix.ninja", "com.amazon.firebat", "com.amazon.firetv.youtube",
         "com.stremio.one", "com.surfshark.vpnclient.android",
@@ -58,10 +58,26 @@ object AppRules {
         "tv.airtel.xstream.tvapp" to "xstream",
     )
 
-    fun label(pkg: String, systemLabel: String?): String =
-        userLabels[pkg] ?: fixedLabels[pkg] ?: systemLabel?.trim()?.takeIf { it.isNotEmpty() } ?: pkg
+    fun label(pkg: String, systemLabel: String?): String = label(pkg) { systemLabel }
 
-    fun artKey(pkg: String): String? = artKeys[pkg]
+    /** [systemLabel] is only asked for when no user or fixed label wins: PackageManager.loadLabel isn't cheap. */
+    inline fun label(pkg: String, systemLabel: () -> String?): String =
+        userLabels[pkg] ?: fixedLabel(pkg) ?: systemLabel()?.trim()?.takeIf { it.isNotEmpty() } ?: pkg
+
+    fun fixedLabel(pkg: String): String? = fixedLabels[pkg]
+
+    /**
+     * The resource name (without "art_") of an app's optional bundled tile art in app/local/res:
+     * a short key for the apps upstream named, else the package with dots as underscores
+     * (com.stremio.one -> art_com_stremio_one.jpg).
+     */
+    fun artKey(pkg: String): String = artKeys[pkg] ?: pkg.lowercase().replace(NOT_RES_CHAR, "_")
+
+    private val NOT_RES_CHAR = Regex("[^a-z0-9_]")
+    private val PACKAGE = Regex("^[A-Za-z][\\w]*(\\.[\\w]+)+$")
+
+    /** Shaped like an Android package name (com.netflix.ninja), installed or not. */
+    fun looksLikePackage(s: String): Boolean = PACKAGE.matches(s)
 
     /** Alphabetical, case-insensitive, stable on package name for ties. */
     fun alphabetical(apps: List<App>): List<App> =

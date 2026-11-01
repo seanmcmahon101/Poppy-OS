@@ -45,8 +45,7 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
-import androidx.compose.ui.layout.boundsInRoot
-import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.onPlaced
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.painterResource
@@ -177,7 +176,7 @@ private fun Mini(app: App, model: FoyerModel, targets: Targets, enabled: Boolean
     Box(
         Modifier
             .size(Dims.MiniW, Dims.MiniH)
-            .onGloballyPositioned { targets.bounds["a:${app.pkg}"] = it.boundsInRoot() }
+            .onPlaced { targets.placed["a:${app.pkg}"] = it }
             .graphicsLayer {
                 val p = f.value
                 scaleX = 1f + 0.1f * p
@@ -369,7 +368,7 @@ private fun AddYourOwn() {
             colorFilter = ColorFilter.tint(Ink.Whisper), modifier = Modifier.size(16.dp),
         )
         Spacer(Modifier.height(4.dp))
-        BasicText("Add your own: ask Iris to send photos to the TV", style = Type.RowNote.copy(fontSize = Type.RowNote.fontSize * 0.92f, lineHeight = Type.RowNote.lineHeight * 0.92f))
+        BasicText("Add your own: homectl wall <photo>", style = Type.RowNote.copy(fontSize = Type.RowNote.fontSize * 0.92f, lineHeight = Type.RowNote.lineHeight * 0.92f))
     }
 }
 

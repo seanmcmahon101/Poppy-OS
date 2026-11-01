@@ -8,6 +8,7 @@ import android.graphics.ImageDecoder
 import android.graphics.drawable.Drawable
 import androidx.annotation.DrawableRes
 import java.io.File
+import kotlin.math.ceil
 import kotlin.math.max
 
 /**
@@ -48,6 +49,38 @@ object Images {
             BitmapFactory.decodeFile(f.path)?.let { scaleTo(it, w, h) }
         }
     }.getOrNull()
+
+    /**
+     * Tile art from a file of any size or shape (`homectl art`): scaled to cover a focused tile and
+     * centre-cropped, decoded straight to that size, so a 4000 px photo costs what a banner does.
+     */
+    fun artFile(f: File): Bitmap? = runCatching {
+        if (hardware) {
+            ImageDecoder.decodeBitmap(ImageDecoder.createSource(f)) { d, info, _ ->
+                val (sw, sh, x, y) = cover(info.size.width, info.size.height, ART_W, ART_H)
+                d.setTargetSize(sw, sh)
+                d.crop = android.graphics.Rect(x, y, x + ART_W, y + ART_H)
+                d.allocator = ImageDecoder.ALLOCATOR_HARDWARE
+            }
+        } else {
+            BitmapFactory.decodeFile(f.path)?.let { src ->
+                val (sw, sh, x, y) = cover(src.width, src.height, ART_W, ART_H)
+                val scaled = Bitmap.createScaledBitmap(src, sw, sh, true).also { if (it !== src) src.recycle() }
+                Bitmap.createBitmap(scaled, x, y, ART_W, ART_H).also { if (it !== scaled) scaled.recycle() }
+            }
+        }
+    }.getOrNull()
+
+    /**
+     * How to make a [w] x [h] image exactly cover [tw] x [th]: the size to scale it to, then the
+     * centred crop's left and top, as (scaledW, scaledH, left, top).
+     */
+    fun cover(w: Int, h: Int, tw: Int, th: Int): IntArray {
+        val s = max(tw / w.toFloat(), th / h.toFloat())
+        val sw = max(tw, ceil(w * s).toInt())
+        val sh = max(th, ceil(h * s).toInt())
+        return intArrayOf(sw, sh, (sw - tw) / 2, (sh - th) / 2)
+    }
 
     /**
      * A wallpaper for the screen: decoded once in software at 1920x1080, the mockup's three scrims
@@ -149,7 +182,7 @@ object Images {
         return s
     }
 
-    /** Centre-crop to 16:9 and scale to 1920x1080 (for Rohan's own photos, cached once). */
+    /** Centre-crop to 16:9 and scale to 1920x1080 (for pushed photos, cached once). */
     fun cropToWall(src: Bitmap): Bitmap {
         val target = WALL_W / WALL_H.toFloat()
         val (cw, ch) = if (src.width / src.height.toFloat() > target) {

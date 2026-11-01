@@ -73,14 +73,24 @@ android {
         resValues = true
     }
     testOptions { unitTests { isIncludeAndroidResources = true } }
-    // Optional brand art for well-known apps, kept out of git (app/local/ is gitignored).
-    sourceSets.getByName("main").res.srcDir("local/res")
+    // Optional brand art for any app (art_<key>.jpg, see AppRules.artKey), kept out of git (app/local/ is gitignored).
+    sourceSets.getByName("main").res.directories += "local/res"
     packaging {
         resources.excludes += setOf("META-INF/*.version", "META-INF/**/LICENSE*", "kotlin/**", "DebugProbesKt.bin")
     }
 }
 
 kotlin { jvmToolchain(21) }
+
+// A failing test prints its assertion and stack trace, so a CI log says why, not only which; on
+// CI ($CI is set by GitHub Actions) every test is listed, so the log also shows what ran.
+val onCi = System.getenv("CI") != null
+tasks.withType<Test>().configureEach {
+    testLogging {
+        if (onCi) events("passed", "skipped", "failed") else events("failed")
+        exceptionFormat = org.gradle.api.tasks.testing.logging.TestExceptionFormat.FULL
+    }
+}
 
 dependencies {
     val composeBom = platform(libs.androidx.compose.bom)

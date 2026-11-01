@@ -253,6 +253,20 @@ class HomeScreenTest {
         assertEquals("Pangong Tso, Ladakh", model.photos[2].caption)
     }
 
+    @Test fun photosPushedLaterJoinOnTheNextTickAndDeletedOnesLeave() {
+        launch(before = { photos("Dawn.jpg" to 0xFFB07A5A.toInt()) })
+        assertEquals(listOf("b:home", "u:Dawn.jpg"), model.photos.map { it.id })
+        model.tick() // nothing changed: the scan answers from memory
+        assertEquals(listOf("b:home", "u:Dawn.jpg"), model.photos.map { it.id })
+        photos("Fjord.jpg" to 0xFF4A7AA6.toInt())
+        model.tick()
+        assertEquals(listOf("b:home", "u:Dawn.jpg", "u:Fjord.jpg"), model.photos.map { it.id })
+        assertTrue("u:Fjord.jpg" in model.photosOn)
+        java.io.File(photoDir, "Dawn.jpg").delete()
+        model.tick()
+        assertEquals(listOf("b:home", "u:Fjord.jpg"), model.photos.map { it.id })
+    }
+
     @Test fun everyFiveMinutesIsAnOption() {
         launch()
         press(listOf(Key.DirectionUp, Key.DirectionCenter, Key.DirectionDown))
