@@ -5,20 +5,36 @@ on:
   push:
   pull_request:
 
+# A newer push to the same branch makes the older run moot.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   build:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      # Seconds, so they run first: a broken homectl shouldn't wait on a ten-minute build to say so.
+      - name: homectl and scripts
+        run: |
+          bash -n homectl
+          command -v shellcheck >/dev/null || sudo apt-get install -y shellcheck
+          shellcheck -S warning homectl
+          python3 -m py_compile scripts/framestats.py
+          python3 scripts/framestats.py < /dev/null
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '21'
       - uses: gradle/actions/setup-gradle@v4
+      # Robolectric downloads its Android framework jars itself, outside Gradle's cache: keep them.
+      - uses: actions/cache@v4
+        with:
+          path: ~/.m2/repository/org/robolectric
+          key: robolectric-${{ hashFiles('gradle/libs.versions.toml') }}
       - name: Tests and release build
         run: ./gradlew testDebugUnitTest assembleRelease --console=plain
-      - name: homectl syntax
-        run: bash -n homectl
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -26,4 +42,5 @@ jobs:
           path: |
             app/build/outputs/apk/release/*.apk
             app/build/outputs/roborazzi/
+            app/build/reports/tests/
           if-no-files-found: ignore

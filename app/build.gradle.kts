@@ -82,6 +82,14 @@ android {
 
 kotlin { jvmToolchain(21) }
 
+// A failing test prints its assertion and stack trace, so a CI log says why, not only which.
+tasks.withType<Test>().configureEach {
+    testLogging {
+        events("failed")
+        exceptionFormat = org.gradle.api.tasks.testing.logging.TestExceptionFormat.FULL
+    }
+}
+
 dependencies {
     val composeBom = platform(libs.androidx.compose.bom)
     implementation(composeBom)
